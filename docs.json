@@ -70,7 +70,8 @@
             "pages": [
               "api/formatters",
               "api/slog-handler",
-              "api/sampling"
+              "api/sampling",
+              "api/styles"
             ]
           }
         ]

@@ -1,0 +1,226 @@
+---
+title: Styles
+description: Customize the visual appearance of text logs with the Styles API
+---
+
+The Styles API allows you to customize the colors, formatting, and visual appearance of log entries when using the TextFormatter. It leverages the [lipgloss](https://github.com/charmbracelet/lipgloss) library to provide rich terminal styling.
+
+## Styles Type
+
+The `Styles` struct defines the visual appearance of all log components:
+
+```go
+type Styles struct {
+    Timestamp lipgloss.Style  // Timestamp styling
+    Caller    lipgloss.Style  // Caller location styling
+    Prefix    lipgloss.Style  // Prefix styling
+    Message   lipgloss.Style  // Message text styling
+    Key       lipgloss.Style  // Field key styling
+    Value     lipgloss.Style  // Field value styling
+    Separator lipgloss.Style  // Key-value separator styling
+    StackFunc lipgloss.Style  // Stack trace function styling
+    StackFile lipgloss.Style  // Stack trace file styling
+    
+    // Map custom styles for specific levels
+    Levels    map[Level]lipgloss.Style
+    
+    // Map custom styles for specific keys
+    Keys      map[string]lipgloss.Style
+    
+    // Map custom styles for specific value keys
+    Values    map[string]lipgloss.Style
+    
+    // Pre-rendered level strings for performance
+    CachedLevelStrings map[Level]string
+}
+```
+
+## DefaultStyles
+
+<ParamField path="DefaultStyles()" type="*Styles">
+  Returns the standard styling configuration with clean, color-coded defaults
+</ParamField>
+
+```go
+func DefaultStyles() *Styles
+```
+
+Initializes and returns the default styling configuration used by Velo. The defaults provide:
+
+- Faint timestamps and callers
+- Bold, faint prefixes
+- Color-coded log levels (blue for Debug, green for Info, yellow for Warn, red for Error, purple for Fatal)
+- Faint field keys
+- Normal field values
+
+**Source:** `styles.go:55-103`
+
+### Example
+
+```go
+// Get default styles
+styles := velo.DefaultStyles()
+
+// Customize timestamp color
+styles.Timestamp = styles.Timestamp.Foreground(lipgloss.Color("240"))
+
+// Customize error level to bright red
+styles.Levels[velo.ErrorLevel] = lipgloss.NewStyle().
+    SetString("ERROR").
+    Bold(true).
+    Foreground(lipgloss.Color("196"))
+```
+
+## SetDefaultStyles
+
+<ParamField path="SetDefaultStyles(s *Styles)" type="void">
+  Overrides the global default styles for all TextFormatter instances
+</ParamField>
+
+```go
+func SetDefaultStyles(s *Styles)
+```
+
+Replaces the global default styles with a custom configuration. This affects all loggers using TextFormatter unless they have their own custom styles.
+
+<Warning>
+Call `SetDefaultStyles()` before creating any loggers to ensure consistent styling across your application.
+</Warning>
+
+**Source:** `styles.go:108-120`
+
+### Example
+
+```go
+// Create custom styles
+customStyles := velo.DefaultStyles()
+
+// Customize for dark terminal
+customStyles.Message = customStyles.Message.Foreground(lipgloss.Color("252"))
+customStyles.Key = customStyles.Key.Foreground(lipgloss.Color("240"))
+
+// Apply globally
+velo.SetDefaultStyles(customStyles)
+
+// All new loggers will use custom styles
+logger := velo.New(os.Stderr)
+```
+
+## Customization Examples
+
+### Custom Level Colors
+
+```go
+styles := velo.DefaultStyles()
+
+// Use different color scheme
+styles.Levels[velo.DebugLevel] = lipgloss.NewStyle().
+    SetString("DEBG").
+    Bold(true).
+    Foreground(lipgloss.Color("33"))  // Bright blue
+
+styles.Levels[velo.InfoLevel] = lipgloss.NewStyle().
+    SetString("INFO").
+    Bold(true).
+    Foreground(lipgloss.Color("82"))  // Bright green
+
+styles.Levels[velo.WarnLevel] = lipgloss.NewStyle().
+    SetString("WARN").
+    Bold(true).
+    Foreground(lipgloss.Color("214")) // Orange
+
+styles.Levels[velo.ErrorLevel] = lipgloss.NewStyle().
+    SetString("ERRO").
+    Bold(true).
+    Foreground(lipgloss.Color("196")) // Bright red
+
+velo.SetDefaultStyles(styles)
+```
+
+### Custom Field Key Styling
+
+```go
+styles := velo.DefaultStyles()
+
+// Highlight specific keys
+styles.Keys["error"] = lipgloss.NewStyle().
+    Foreground(lipgloss.Color("196")).
+    Bold(true)
+
+styles.Keys["user_id"] = lipgloss.NewStyle().
+    Foreground(lipgloss.Color("45"))
+
+styles.Keys["duration"] = lipgloss.NewStyle().
+    Foreground(lipgloss.Color("214"))
+
+velo.SetDefaultStyles(styles)
+```
+
+### Minimalist Theme
+
+```go
+styles := velo.DefaultStyles()
+
+// Remove all colors and formatting
+styles.Timestamp = lipgloss.NewStyle()
+styles.Caller = lipgloss.NewStyle()
+styles.Prefix = lipgloss.NewStyle()
+styles.Message = lipgloss.NewStyle()
+styles.Key = lipgloss.NewStyle()
+styles.Value = lipgloss.NewStyle()
+styles.Separator = lipgloss.NewStyle()
+
+// Simple level indicators
+for level := range styles.Levels {
+    styles.Levels[level] = lipgloss.NewStyle().
+        SetString(strings.ToUpper(level.String()))
+}
+
+velo.SetDefaultStyles(styles)
+```
+
+### High Contrast Theme
+
+```go
+styles := velo.DefaultStyles()
+
+// High contrast colors for accessibility
+styles.Message = styles.Message.
+    Foreground(lipgloss.Color("255")). // Bright white
+    Bold(true)
+
+styles.Key = styles.Key.
+    Foreground(lipgloss.Color("51"))   // Cyan
+
+styles.Value = styles.Value.
+    Foreground(lipgloss.Color("226"))  // Yellow
+
+velo.SetDefaultStyles(styles)
+```
+
+## Performance Considerations
+
+The `CachedLevelStrings` map stores pre-rendered level strings to avoid re-rendering on every log entry. This is automatically populated by `DefaultStyles()` and `SetDefaultStyles()`.
+
+<Tip>
+When creating custom styles, ensure you populate `CachedLevelStrings` for optimal performance:
+
+```go
+styles.CachedLevelStrings = make(map[Level]string)
+for level, style := range styles.Levels {
+    styles.CachedLevelStrings[level] = style.String()
+}
+```
+</Tip>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="TextFormatter" icon="palette" href="/api/formatters">
+    Learn about text formatting
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure logger output formats
+  </Card>
+</CardGroup>
