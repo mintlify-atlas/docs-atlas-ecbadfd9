@@ -1,0 +1,98 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Velo",
+  "projectDescription": "Lightning fast, colorful, structured logging library for Go",
+  "theme": "aspen",
+  "primaryColor": "#7C3AED",
+  "lightColor": "#A78BFA",
+  "darkColor": "#5B21B6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/logging-levels",
+              "concepts/async-logging",
+              "concepts/overflow-strategies",
+              "concepts/formatters"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/basic-usage",
+              "guides/typed-fields",
+              "guides/context-logging",
+              "guides/slog-integration",
+              "guides/configuration",
+              "guides/performance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/logger",
+              "api/levels",
+              "api/fields",
+              "api/options"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "api/formatters",
+              "api/slog-handler",
+              "api/sampling"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Asynchronous logging with background workers",
+    "Zero-allocation typed fields API",
+    "Colorful text and JSON formatters",
+    "slog.Handler adapter",
+    "Configurable overflow strategies",
+    "High-performance benchmarks"
+  ],
+  "publicApiSurface": [
+    "New()",
+    "NewWithOptions()",
+    "Default()",
+    "Logger.Debug()",
+    "Logger.Info()",
+    "Logger.Warn()",
+    "Logger.Error()",
+    "Logger.LogFields()",
+    "Logger.With()",
+    "Logger.WithFields()",
+    "String()",
+    "Int()",
+    "Bool()",
+    "Time()",
+    "Duration()",
+    "Err()",
+    "NewSlogHandler()",
+    "Level",
+    "Options",
+    "Field"
+  ]
+}
