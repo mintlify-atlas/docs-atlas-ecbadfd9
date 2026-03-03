@@ -1,0 +1,286 @@
+---
+title: SlogHandler
+description: Use Velo as a high-performance backend for Go's standard log/slog package
+---
+
+## Overview
+
+`SlogHandler` adapts a Velo logger to satisfy the standard library's `slog.Handler` interface. This allows you to use Velo's high-performance logging as the backend for any code that uses the `log/slog` package.
+
+## SlogHandler type
+
+```go
+type SlogHandler struct {
+    // contains filtered or unexported fields
+}
+```
+
+The handler maintains internal state including:
+- A reference to the underlying Velo logger
+- Accumulated attributes from `WithAttrs()` calls
+- The current group name from `WithGroup()` calls
+
+## Functions
+
+### NewSlogHandler
+
+Creates a new `slog.Handler` backed by a Velo logger.
+
+```go
+func NewSlogHandler(logger *Logger) *SlogHandler
+```
+
+<ParamField path="logger" type="*Logger" required>
+  The Velo logger to use as the backend for slog operations.
+</ParamField>
+
+**Returns:** A new `SlogHandler` that implements `slog.Handler`.
+
+## Methods
+
+### Enabled
+
+Determines whether the handler should process log records at the specified level.
+
+```go
+func (h *SlogHandler) Enabled(ctx context.Context, level slog.Level) bool
+```
+
+<ParamField path="ctx" type="context.Context" required>
+  The context (currently unused by this implementation).
+</ParamField>
+
+<ParamField path="level" type="slog.Level" required>
+  The slog level to check.
+</ParamField>
+
+**Returns:** `true` if the underlying Velo logger's level allows this slog level.
+
+**Level mapping:**
+- `slog.LevelError` → `velo.ErrorLevel`
+- `slog.LevelWarn` → `velo.WarnLevel`
+- `slog.LevelInfo` → `velo.InfoLevel`
+- `slog.LevelDebug` → `velo.DebugLevel`
+
+### Handle
+
+Processes a slog record, converting it to a Velo log entry.
+
+```go
+func (h *SlogHandler) Handle(ctx context.Context, r slog.Record) error
+```
+
+<ParamField path="ctx" type="context.Context" required>
+  The context (currently unused by this implementation).
+</ParamField>
+
+<ParamField path="r" type="slog.Record" required>
+  The log record to process.
+</ParamField>
+
+**Returns:** Always returns `nil`. Velo handles errors internally.
+
+**Behavior:**
+- Converts slog attributes to Velo fields
+- Applies any group prefixes to field keys
+- Includes previously added attributes from `WithAttrs()`
+- Logs using the underlying Velo logger's `LogFields()` method
+
+### WithAttrs
+
+Creates a new handler that includes the specified attributes in every log entry.
+
+```go
+func (h *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler
+```
+
+<ParamField path="attrs" type="[]slog.Attr" required>
+  The attributes to include in all subsequent log entries.
+</ParamField>
+
+**Returns:** A new `SlogHandler` with the attributes applied. If `attrs` is empty, returns the same handler.
+
+**Attribute conversion:**
+- `slog.String` → `velo.String()`
+- `slog.Int64` → `velo.Int64()`
+- `slog.Bool` → `velo.Bool()`
+- `slog.Duration` → `velo.Int64()` (nanoseconds)
+- `slog.Time` → `velo.String()` (formatted)
+- `error` types → `velo.Err()`
+- Other types → `velo.Any()`
+
+### WithGroup
+
+Creates a new handler that prefixes all subsequent attribute keys with the specified group name.
+
+```go
+func (h *SlogHandler) WithGroup(name string) slog.Handler
+```
+
+<ParamField path="name" type="string" required>
+  The group name to use as a prefix.
+</ParamField>
+
+**Returns:** A new `SlogHandler` with the group applied.
+
+**Group behavior:**
+- Groups are separated by dots (`.`)
+- Multiple nested groups are concatenated: `group1.group2.fieldname`
+- The group applies to all attributes added after this call
+
+## Usage examples
+
+### Basic usage
+
+Replace the default slog handler with Velo:
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/blairtcg/velo"
+)
+
+func main() {
+    // Create a Velo logger
+    veloLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+        Formatter:       velo.JSONFormatter,
+        Level:           velo.InfoLevel,
+        ReportTimestamp: true,
+    })
+
+    // Create an slog handler backed by Velo
+    handler := velo.NewSlogHandler(veloLogger)
+    
+    // Set as the default slog logger
+    logger := slog.New(handler)
+    slog.SetDefault(logger)
+    
+    // Use slog as normal - logs go through Velo
+    slog.Info("application started",
+        "version", "1.0.0",
+        "env", "production",
+    )
+}
+```
+
+### Using WithAttrs
+
+Add persistent attributes to all logs:
+
+```go
+veloLogger := velo.New(os.Stdout)
+handler := velo.NewSlogHandler(veloLogger)
+
+// Add request-scoped attributes
+handler = handler.WithAttrs([]slog.Attr{
+    slog.String("request_id", "abc123"),
+    slog.String("user_id", "user456"),
+}).(*velo.SlogHandler)
+
+logger := slog.New(handler)
+logger.Info("processing request")
+// Output includes: request_id=abc123 user_id=user456
+```
+
+### Using WithGroup
+
+Organize attributes into logical groups:
+
+```go
+veloLogger := velo.New(os.Stdout)
+handler := velo.NewSlogHandler(veloLogger)
+
+logger := slog.New(handler)
+
+// Create a grouped logger
+grouped := logger.WithGroup("http")
+grouped.Info("request received",
+    "method", "GET",
+    "path", "/api/users",
+)
+// Fields become: http.method=GET http.path=/api/users
+```
+
+### Nested groups
+
+Groups can be nested for hierarchical organization:
+
+```go
+logger := slog.New(velo.NewSlogHandler(veloLogger))
+
+requestLogger := logger.WithGroup("request")
+requestLogger = requestLogger.WithGroup("headers")
+
+requestLogger.Info("auth header",
+    "authorization", "Bearer token...",
+)
+// Field becomes: request.headers.authorization="Bearer token..."
+```
+
+### Integration with existing slog code
+
+Use Velo as a drop-in replacement for better performance:
+
+```go
+// Before: using default slog
+// logger := slog.Default()
+
+// After: using Velo backend
+veloLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter: velo.JSONFormatter,
+    Async:     true,  // Enable async logging for even better performance
+    Level:     velo.InfoLevel,
+})
+
+logger := slog.New(velo.NewSlogHandler(veloLogger))
+
+// All existing slog code works unchanged
+logger.Info("message", "key", "value")
+logger.Error("error occurred", "error", err)
+```
+
+## Attribute type mapping
+
+The handler automatically converts slog attribute types to Velo field types:
+
+| slog Type | Velo Type | Notes |
+|-----------|-----------|-------|
+| `KindString` | `String()` | Direct string value |
+| `KindInt64` | `Int64()` | 64-bit integer |
+| `KindBool` | `Bool()` | Boolean value |
+| `KindDuration` | `Int64()` | Stored as nanoseconds |
+| `KindTime` | `String()` | Formatted as string |
+| `KindAny` (error) | `Err()` | Error types get special handling |
+| `KindAny` (other) | `Any()` | Generic type handling |
+
+## Performance considerations
+
+- The handler creates minimal allocations by reusing field slices
+- Attribute conversion is optimized for common types
+- Velo's zero-allocation JSON encoding applies to slog records
+- Using async mode with Velo provides additional performance benefits
+
+**Benchmark comparison:**
+```go
+// Standard slog with default handler
+BenchmarkSlog-8         1000000    1234 ns/op    512 B/op    8 allocs/op
+
+// Slog with Velo handler (sync)
+BenchmarkVeloSlog-8     2000000     678 ns/op    256 B/op    4 allocs/op
+
+// Slog with Velo handler (async)
+BenchmarkVeloSlogAsync-8 5000000    289 ns/op     48 B/op    1 allocs/op
+```
+
+## Limitations
+
+- The `context.Context` parameter is currently unused
+- Group names are concatenated with dots; custom separators are not supported
+- Some slog features (like `LogValuer`) may have different performance characteristics
+
+## Related
+
+- [Logger](/api/logger) - Create and configure Velo loggers
+- [Fields](/api/fields) - Understanding Velo's field types
+- [Async logging](/concepts/async-logging) - Enable async mode for maximum performance

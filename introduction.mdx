@@ -1,0 +1,77 @@
+---
+title: Introduction
+description: Lightning fast, colorful, structured logging in Go
+---
+
+Velo gives you a clear, developer friendly API without sacrificing app performance. It moves I/O operations to a background worker so your hot paths never block waiting for logs to write.
+
+## Why Velo?
+
+<CardGroup cols={2}>
+  <Card title="Lightning fast" icon="bolt">
+    Outperforms zap by 22% with zero-allocation field logging. Asynchronous I/O keeps your application fast under heavy load.
+  </Card>
+  
+  <Card title="Developer friendly" icon="code">
+    Clean API with both loosely typed key-value pairs and strongly typed fields. Beautiful colorized output for local development.
+  </Card>
+  
+  <Card title="Production ready" icon="rocket">
+    JSON output, structured fields, and configurable overflow strategies. Control backpressure with sync, drop, or block modes.
+  </Card>
+  
+  <Card title="Zero dependencies" icon="cubes">
+    Minimal footprint with no external logging dependencies. Drop-in replacement for Go's standard slog handler.
+  </Card>
+</CardGroup>
+
+## Performance
+
+Velo uses a hybrid synchronous and asynchronous model to keep your application fast under heavy load.
+
+When you log a message, Velo formats it on the caller's goroutine and sends it to a buffered channel. A background worker reads from this channel and writes to the output stream. This parallelizes the work and isolates your application code from I/O latency.
+
+### Benchmarks
+
+Logging a message with 10 fields:
+
+| Package | Time | vs zap | Allocations |
+| --- | --- | --- | --- |
+| **velo (fields)** | 513 ns/op | **-22%** | 1 allocs/op |
+| **velo** | 591 ns/op | **-10%** | 6 allocs/op |
+| zap | 656 ns/op | +0% | 5 allocs/op |
+| zap (sugared) | 856 ns/op | +30% | 10 allocs/op |
+| zerolog | 2144 ns/op | +227% | 38 allocs/op |
+| slog | 2700 ns/op | +312% | 41 allocs/op |
+
+## Backpressure handling
+
+In high throughput scenarios, your application might generate logs faster than the output stream can write them. When the buffer is full, backpressure occurs.
+
+You can control how Velo handles a full buffer using the `OverflowStrategy` option:
+
+<AccordionGroup>
+  <Accordion title="OverflowSync (Default)">
+    The logger temporarily switches to a synchronous write. The calling goroutine writes its preformatted log entry directly to the output stream. This prevents log loss and controls memory use, but temporarily blocks the calling goroutine.
+  </Accordion>
+  
+  <Accordion title="OverflowDrop">
+    The logger discards new log entries until space opens up in the buffer. Use this strategy when maintaining low latency is more critical than keeping every log entry.
+  </Accordion>
+  
+  <Accordion title="OverflowBlock">
+    The calling goroutine waits and blocks until space becomes available in the buffer.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Get started by installing Velo in your Go project
+  </Card>
+  
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Learn the basics with working code examples
+  </Card>
+</CardGroup>

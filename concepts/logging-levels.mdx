@@ -1,0 +1,136 @@
+---
+title: Logging levels
+description: Understand Velo's hierarchical log levels and how to filter messages by severity
+---
+
+Velo uses a hierarchical logging system where each level represents a different severity. The logger discards messages with a level lower than its configured minimum.
+
+## Available log levels
+
+Velo provides seven log levels, defined as `Level` type in level.go:30-59:
+
+<CodeGroup>
+```go Debug
+DebugLevel // -1: Fine grained informational events for debugging
+```
+
+```go Info (Default)
+InfoLevel // 0: Informational messages about application progress
+```
+
+```go Warn
+WarnLevel // 1: Potentially harmful situations
+```
+
+```go Error
+ErrorLevel // 2: Error events that allow the app to continue
+```
+
+```go DPanic
+DPanicLevel // 3: Critical errors (panics in development mode)
+```
+
+```go Panic
+PanicLevel // 4: Severe errors (logger panics after writing)
+```
+
+```go Fatal
+FatalLevel // 5: Very severe errors (calls os.Exit(1) after writing)
+```
+</CodeGroup>
+
+### Level hierarchy
+
+Levels are ordered by severity from lowest to highest. When you set a minimum level, the logger only processes messages at that level or higher:
+
+- Setting `DebugLevel` logs everything
+- Setting `InfoLevel` (default) filters out debug messages
+- Setting `ErrorLevel` only logs errors and critical messages
+
+<Warning>
+**PanicLevel** causes the logger to panic after writing the message. **FatalLevel** calls `os.Exit(1)` after writing, immediately terminating your application.
+</Warning>
+
+## Level serialization
+
+### JSON format
+
+The `Level.JSONField()` method (level.go:65-83) returns a zero-allocation string for JSON serialization:
+
+```json
+{"level":"info"}
+{"level":"error"}
+{"level":"fatal"}
+```
+
+### Text format
+
+The `Level.String()` method (level.go:86-105) returns lowercase ASCII representations:
+
+```text
+debug
+info
+warn
+error
+dpanic
+panic
+fatal
+```
+
+## Parsing levels
+
+Velo accepts both lowercase and uppercase level strings via `ParseLevel()` (level.go:154-158):
+
+```go
+level, err := velo.ParseLevel("info")
+level, err := velo.ParseLevel("INFO") // Also valid
+```
+
+The `UnmarshalText()` method (level.go:118-126) enables configuration via YAML, TOML, or JSON files:
+
+```yaml
+log_level: error
+```
+
+## Dynamic level adjustment
+
+The `AtomicLevel` type (level.go:165-167) allows you to safely change log levels at runtime across all goroutines without restarting your application.
+
+### Creating an atomic level
+
+```go
+// Initialize at InfoLevel (default)
+lvl := velo.NewAtomicLevel()
+
+// Initialize at a specific level
+lvl := velo.NewAtomicLevelAt(velo.ErrorLevel)
+```
+
+### Changing levels at runtime
+
+```go
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Level: lvl.Level(),
+})
+
+// Later, increase minimum level to reduce log volume
+lvl.SetLevel(velo.ErrorLevel)
+```
+
+<Info>
+The `AtomicLevel.SetLevel()` method (level.go:209-211) uses atomic operations to ensure thread-safe updates. All loggers referencing the same `AtomicLevel` immediately respect the new threshold.
+</Info>
+
+### Checking if a level is enabled
+
+```go
+if lvl.Enabled(velo.DebugLevel) {
+    logger.Debug("detailed diagnostic info")
+}
+```
+
+The `Enabled()` method (level.go:199-201) returns true if the specified level meets or exceeds the current minimum, allowing you to avoid expensive operations when logs would be discarded.
+
+## Special level
+
+Velo internally uses `noLevel = 100` (level.go:58) for log entries that should not display a level field. This is an implementation detail not exposed in the public API.

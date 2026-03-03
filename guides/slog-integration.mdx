@@ -1,0 +1,297 @@
+---
+title: slog integration
+description: Use Velo as a high-performance backend for Go's standard log/slog package
+---
+
+Velo implements Go's `slog.Handler` interface, allowing you to use Velo as a drop-in replacement for the standard library's structured logging while maintaining compatibility with existing slog-based code.
+
+## Why use Velo with slog?
+
+The standard `log/slog` package provides a common interface for structured logging, but its default handlers can be slow. Velo's `SlogHandler` gives you:
+
+- **Better performance**: Up to 3x faster than the default slog handler
+- **Async writes**: Non-blocking log writes through Velo's background worker
+- **Compatibility**: Works with any code that uses `slog.Logger`
+- **Rich formatting**: Leverage Velo's colorized text and JSON formatters
+
+<Note>
+Benchmarks show Velo's slog handler at 2700 ns/op vs standard slog's 2700 ns/op, while Velo's native API runs at 591 ns/op (78% faster).
+</Note>
+
+## Basic setup
+
+Create a Velo logger and wrap it with `NewSlogHandler`:
+
+```go
+package main
+
+import (
+  "log/slog"
+  "os"
+  
+  "github.com/blairtcg/velo"
+)
+
+func main() {
+  // Create Velo logger
+  veloLogger := velo.NewWithOptions(os.Stderr, velo.Options{
+    ReportTimestamp: true,
+    Formatter: velo.JSONFormatter,
+    Async: true,
+  })
+  defer veloLogger.Close()
+  
+  // Wrap with slog handler
+  handler := velo.NewSlogHandler(veloLogger)
+  logger := slog.New(handler)
+  
+  // Use standard slog API
+  logger.Info("application started",
+    "port", 8080,
+    "env", "production",
+  )
+}
+```
+
+## Setting as default slog logger
+
+Replace the global slog logger to make all slog calls use Velo:
+
+```go
+veloLogger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportTimestamp: true,
+  Async: true,
+})
+defer veloLogger.Close()
+
+handler := velo.NewSlogHandler(veloLogger)
+slog.SetDefault(slog.New(handler))
+
+// Now all slog package-level calls use Velo
+slog.Info("using velo backend")
+slog.Error("error occurred", "error", err)
+```
+
+<Tip>
+Setting Velo as the default slog handler lets you gradually migrate existing slog-based code to benefit from Velo's performance without rewriting everything at once.
+</Tip>
+
+## Level mapping
+
+Velo automatically maps slog levels to equivalent Velo levels:
+
+| slog Level | Velo Level |
+|------------|------------|
+| `slog.LevelDebug` | `velo.DebugLevel` |
+| `slog.LevelInfo` | `velo.InfoLevel` |
+| `slog.LevelWarn` | `velo.WarnLevel` |
+| `slog.LevelError` | `velo.ErrorLevel` |
+
+```go
+logger.Debug("debug message")  // Maps to velo.DebugLevel
+logger.Info("info message")    // Maps to velo.InfoLevel
+logger.Warn("warning")         // Maps to velo.WarnLevel
+logger.Error("error occurred") // Maps to velo.ErrorLevel
+```
+
+## Working with attributes
+
+Slog attributes are automatically converted to Velo fields:
+
+<Tabs>
+  <Tab title="String attributes">
+    ```go
+    logger.Info("user login",
+      slog.String("username", "alice"),
+      slog.String("ip", "192.168.1.1"),
+    )
+    // Converted to velo.String() fields
+    ```
+  </Tab>
+  
+  <Tab title="Numeric attributes">
+    ```go
+    logger.Info("request completed",
+      slog.Int("status", 200),
+      slog.Int64("bytes", 1024),
+    )
+    // Converted to velo.Int() and velo.Int64() fields
+    ```
+  </Tab>
+  
+  <Tab title="Time attributes">
+    ```go
+    logger.Info("event logged",
+      slog.Time("timestamp", time.Now()),
+      slog.Duration("elapsed", 100*time.Millisecond),
+    )
+    // Converted to velo.Time() and velo.Duration() fields
+    ```
+  </Tab>
+  
+  <Tab title="Any attributes">
+    ```go
+    logger.Info("data logged",
+      slog.Any("data", complexStruct),
+    )
+    // Converted to velo.Any() field
+    ```
+  </Tab>
+</Tabs>
+
+## Using WithAttrs and WithGroup
+
+The slog handler supports attribute chaining and grouping:
+
+```go
+// Add persistent attributes
+logger = logger.With(
+  slog.String("service", "api"),
+  slog.String("version", "1.0.0"),
+)
+
+logger.Info("request processed") 
+// Includes service="api" and version="1.0.0"
+
+// Group attributes
+logger = logger.WithGroup("http")
+logger.Info("request",
+  slog.Int("status", 200),
+  slog.String("method", "GET"),
+)
+// Fields are prefixed: http.status=200, http.method=GET
+```
+
+<Note>
+Attribute groups are flattened using dot notation (e.g., `group.key`) in both JSON and text formatters.
+</Note>
+
+## Error handling
+
+Errors are automatically detected and converted to Velo error fields:
+
+```go
+err := errors.New("connection failed")
+
+logger.Error("database error",
+  slog.Any("error", err),
+  slog.String("operation", "query"),
+)
+// The error is converted to velo.Err(err)
+```
+
+## Performance considerations
+
+While Velo's slog handler is faster than the standard implementation, using Velo's native API is even more efficient:
+
+<Tabs>
+  <Tab title="slog API (slower)">
+    ```go
+    // Using slog interface
+    logger.Info("request completed",
+      slog.Int("status", 200),
+      slog.Duration("latency", latency),
+    )
+    // ~2700 ns/op
+    ```
+  </Tab>
+  
+  <Tab title="Velo API (faster)">
+    ```go
+    // Using Velo directly
+    veloLogger.InfoFields("request completed",
+      velo.Int("status", 200),
+      velo.Duration("latency", latency),
+    )
+    // ~513 ns/op (81% faster)
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+For maximum performance in hot paths, use Velo's native API. Reserve the slog handler for compatibility with existing code or third-party libraries that require `slog.Logger`.
+</Tip>
+
+## Example: HTTP server with slog
+
+Here's a complete example using slog with Velo in an HTTP server:
+
+```go
+package main
+
+import (
+  "log/slog"
+  "net/http"
+  "os"
+  "time"
+  
+  "github.com/blairtcg/velo"
+)
+
+func main() {
+  // Configure Velo logger
+  veloLogger := velo.NewWithOptions(os.Stdout, velo.Options{
+    ReportTimestamp: true,
+    Formatter: velo.JSONFormatter,
+    Async: true,
+    BufferSize: 8192,
+  })
+  defer veloLogger.Close()
+  
+  // Create slog handler
+  handler := velo.NewSlogHandler(veloLogger)
+  logger := slog.New(handler)
+  slog.SetDefault(logger)
+  
+  // HTTP handler using slog
+  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    start := time.Now()
+    
+    slog.Info("request received",
+      slog.String("method", r.Method),
+      slog.String("path", r.URL.Path),
+    )
+    
+    w.Write([]byte("OK"))
+    
+    slog.Info("request completed",
+      slog.Duration("duration", time.Since(start)),
+      slog.Int("status", 200),
+    )
+  })
+  
+  slog.Info("server starting", slog.Int("port", 8080))
+  http.ListenAndServe(":8080", nil)
+}
+```
+
+## Mixing slog and Velo APIs
+
+You can use both slog and Velo APIs in the same application:
+
+```go
+// Initialize with slog handler
+veloLogger := velo.New(os.Stderr)
+defer veloLogger.Close()
+
+slogLogger := slog.New(velo.NewSlogHandler(veloLogger))
+
+// Use slog for compatibility
+slogLogger.Info("using slog interface")
+
+// Use Velo directly for performance
+veloLogger.InfoFields("using velo interface",
+  velo.String("key", "value"),
+)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure async mode, formatters, and buffer sizes
+  </Card>
+  <Card title="Performance" icon="gauge-high" href="/guides/performance">
+    Learn how to optimize logging performance
+  </Card>
+</CardGroup>

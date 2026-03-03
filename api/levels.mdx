@@ -1,0 +1,402 @@
+---
+title: Levels
+description: Logging priority levels and dynamic level management
+---
+
+The `Level` type represents a logging priority. Higher levels indicate more severe conditions. The Logger discards messages with a level lower than its configured minimum.
+
+## Level type
+
+```go
+type Level int8
+```
+
+Represents a logging priority with values ranging from DebugLevel to FatalLevel.
+
+## Level constants
+
+### DebugLevel
+
+Designates fine grained informational events that are most useful to debug an application.
+
+```go
+const DebugLevel Level = -1
+```
+
+**Example**
+
+```go
+logger.SetLevel(velo.DebugLevel)
+logger.Debug("entering function", "name", "processRequest")
+```
+
+### InfoLevel
+
+Designates informational messages that highlight the progress of the application at coarse grained level. This is the default level.
+
+```go
+const InfoLevel Level = 0
+```
+
+**Example**
+
+```go
+logger.Info("server started", "port", 8080)
+```
+
+### WarnLevel
+
+Designates potentially harmful situations.
+
+```go
+const WarnLevel Level = 1
+```
+
+**Example**
+
+```go
+logger.Warn("high memory usage", "percent", 85)
+```
+
+### ErrorLevel
+
+Designates error events that might still allow the application to continue running.
+
+```go
+const ErrorLevel Level = 2
+```
+
+**Example**
+
+```go
+logger.Error("failed to connect to database", "error", err)
+```
+
+### DPanicLevel
+
+Designates critical errors. In development, the Logger panics after writing the message.
+
+```go
+const DPanicLevel Level = 3
+```
+
+**Example**
+
+```go
+logger.Log(velo.DPanicLevel, "critical state detected")
+```
+
+### PanicLevel
+
+Designates severe errors. The Logger panics after writing the message.
+
+```go
+const PanicLevel Level = 4
+```
+
+**Example**
+
+```go
+logger.Panic("unrecoverable error", "component", "auth")
+```
+
+### FatalLevel
+
+Designates very severe error events. The Logger calls os.Exit(1) after writing the message.
+
+```go
+const FatalLevel Level = 5
+```
+
+**Example**
+
+```go
+logger.Fatal("cannot start application", "error", err)
+```
+
+## Level methods
+
+### String
+
+Returns the lowercase ASCII representation of the level.
+
+```go
+func (l Level) String() string
+```
+
+**Example**
+
+```go
+level := velo.InfoLevel
+fmt.Println(level.String()) // Output: info
+```
+
+### JSONField
+
+Returns the formatted JSON key-value pair for the level.
+
+```go
+func (l Level) JSONField() string
+```
+
+Provides a zero allocation string (e.g., `"level":"info"`) for the JSONEncoder to use during serialization.
+
+**Example**
+
+```go
+level := velo.InfoLevel
+fmt.Println(level.JSONField()) // Output: "level":"info"
+```
+
+### MarshalText
+
+Serializes the Level to text.
+
+```go
+func (l Level) MarshalText() ([]byte, error)
+```
+
+Returns the lowercase string representation of the level (e.g., "info").
+
+**Example**
+
+```go
+level := velo.WarnLevel
+data, _ := level.MarshalText()
+fmt.Println(string(data)) // Output: warn
+```
+
+### UnmarshalText
+
+Deserializes text into a Level.
+
+```go
+func (l *Level) UnmarshalText(text []byte) error
+```
+
+<ParamField path="text" type="[]byte">
+  The text representation of the level
+</ParamField>
+
+Accepts lowercase or uppercase string representations (e.g., "info" or "INFO"). This facilitates configuring log levels via YAML, TOML, or JSON.
+
+**Example**
+
+```go
+var level velo.Level
+err := level.UnmarshalText([]byte("error"))
+if err != nil {
+    panic(err)
+}
+fmt.Println(level) // Output: error
+```
+
+## Parsing functions
+
+### ParseLevel
+
+Converts a string into a Level.
+
+```go
+func ParseLevel(text string) (Level, error)
+```
+
+<ParamField path="text" type="string">
+  The string representation of the level
+</ParamField>
+
+Accepts lowercase or uppercase string representations. Returns an error if the string does not match a known level.
+
+**Example**
+
+```go
+level, err := velo.ParseLevel("warn")
+if err != nil {
+    panic(err)
+}
+logger.SetLevel(level)
+```
+
+## AtomicLevel
+
+Represents a dynamically adjustable logging level.
+
+```go
+type AtomicLevel struct {
+    // contains filtered or unexported fields
+}
+```
+
+Allows you to safely change the log level of a Logger and all its descendants at runtime without restarting the application. You must create an AtomicLevel using the `NewAtomicLevel` or `NewAtomicLevelAt` constructors.
+
+### NewAtomicLevel
+
+Initializes an AtomicLevel set to InfoLevel.
+
+```go
+func NewAtomicLevel() AtomicLevel
+```
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevel()
+fmt.Println(atomicLevel.Level()) // Output: info
+```
+
+### NewAtomicLevelAt
+
+Initializes an AtomicLevel set to the specified Level.
+
+```go
+func NewAtomicLevelAt(l Level) AtomicLevel
+```
+
+<ParamField path="l" type="Level">
+  The initial level
+</ParamField>
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevelAt(velo.WarnLevel)
+fmt.Println(atomicLevel.Level()) // Output: warn
+```
+
+### ParseAtomicLevel
+
+Converts a string into an AtomicLevel.
+
+```go
+func ParseAtomicLevel(text string) (AtomicLevel, error)
+```
+
+<ParamField path="text" type="string">
+  The string representation of the level
+</ParamField>
+
+Accepts lowercase or uppercase string representations. Returns an error if the string does not match a known level.
+
+**Example**
+
+```go
+atomicLevel, err := velo.ParseAtomicLevel("debug")
+if err != nil {
+    panic(err)
+}
+```
+
+## AtomicLevel methods
+
+### Level
+
+Retrieves the current minimum logging level.
+
+```go
+func (lvl AtomicLevel) Level() Level
+```
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevel()
+fmt.Println(atomicLevel.Level()) // Output: info
+```
+
+### SetLevel
+
+Updates the minimum logging level safely across all goroutines.
+
+```go
+func (lvl AtomicLevel) SetLevel(l Level)
+```
+
+<ParamField path="l" type="Level">
+  The new level to set
+</ParamField>
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevel()
+atomicLevel.SetLevel(velo.ErrorLevel)
+```
+
+### Enabled
+
+Determines if the specified level meets or exceeds the current minimum.
+
+```go
+func (lvl AtomicLevel) Enabled(l Level) bool
+```
+
+<ParamField path="l" type="Level">
+  The level to check
+</ParamField>
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevelAt(velo.WarnLevel)
+if atomicLevel.Enabled(velo.ErrorLevel) {
+    fmt.Println("Error logging is enabled")
+}
+```
+
+### String
+
+Returns the string representation of the current minimum level.
+
+```go
+func (lvl AtomicLevel) String() string
+```
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevelAt(velo.DebugLevel)
+fmt.Println(atomicLevel.String()) // Output: debug
+```
+
+### MarshalText
+
+Serializes the AtomicLevel to a byte slice.
+
+```go
+func (lvl AtomicLevel) MarshalText() (text []byte, err error)
+```
+
+Returns the lowercase string representation of the current minimum level.
+
+**Example**
+
+```go
+atomicLevel := velo.NewAtomicLevelAt(velo.InfoLevel)
+data, _ := atomicLevel.MarshalText()
+fmt.Println(string(data)) // Output: info
+```
+
+### UnmarshalText
+
+Deserializes text into the AtomicLevel.
+
+```go
+func (lvl *AtomicLevel) UnmarshalText(text []byte) error
+```
+
+<ParamField path="text" type="[]byte">
+  The text representation of the level
+</ParamField>
+
+Accepts the same string representations as the static Level type.
+
+**Example**
+
+```go
+var atomicLevel velo.AtomicLevel
+err := atomicLevel.UnmarshalText([]byte("warn"))
+if err != nil {
+    panic(err)
+}
+fmt.Println(atomicLevel.Level()) // Output: warn
+```

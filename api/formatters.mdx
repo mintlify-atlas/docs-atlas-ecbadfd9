@@ -1,0 +1,243 @@
+---
+title: Formatters
+description: Format log entries as text or JSON with custom serialization
+---
+
+## Overview
+
+Formatters control how Velo serializes log entries. The library provides two built-in formatters and supports custom formatter implementations through the `Entry` type.
+
+## Formatter type
+
+The `Formatter` type defines the serialization format for log entries.
+
+```go
+type Formatter int
+```
+
+### Constants
+
+<ParamField path="TextFormatter" type="Formatter">
+  Serializes log entries as human-readable, colorized text with key-value pairs.
+  
+  **Output format:**
+  ```
+  2026/01/15 14:30:45 INFO user logged in user_id=123 ip=192.168.1.1
+  ```
+</ParamField>
+
+<ParamField path="JSONFormatter" type="Formatter">
+  Serializes log entries as structured JSON objects.
+  
+  **Output format:**
+  ```json
+  {"time":"2026-01-15T14:30:45Z","level":"info","msg":"user logged in","user_id":123,"ip":"192.168.1.1"}
+  ```
+</ParamField>
+
+## Using formatters
+
+### Setting the formatter
+
+Specify the formatter when creating a logger:
+
+```go
+import "github.com/blairtcg/velo"
+
+// Text formatter (default)
+logger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter: velo.TextFormatter,
+})
+
+// JSON formatter
+jsonLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter: velo.JSONFormatter,
+})
+```
+
+### Text formatter example
+
+The text formatter produces human-readable output with terminal colors:
+
+```go
+logger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter:       velo.TextFormatter,
+    ReportTimestamp: true,
+})
+
+logger.Info("server started",
+    "port", 8080,
+    "env", "production",
+)
+// Output: 2026/01/15 14:30:45 INFO server started port=8080 env=production
+```
+
+**Text format features:**
+- Colorized log levels for better visibility
+- Automatic quoting of values containing spaces or equals signs
+- Custom styling support through the `DefaultStyles()` system
+- Caller information formatted as `<file:line>`
+
+### JSON formatter example
+
+The JSON formatter produces structured output ideal for log aggregation:
+
+```go
+jsonLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter:       velo.JSONFormatter,
+    ReportTimestamp: true,
+    TimeFormat:      time.RFC3339,
+})
+
+jsonLogger.Info("server started",
+    "port", 8080,
+    "env", "production",
+)
+// Output: {"time":"2026-01-15T14:30:45Z","level":"info","msg":"server started","port":8080,"env":"production"}
+```
+
+**JSON format features:**
+- Zero-allocation JSON encoding for maximum performance
+- Bypasses standard library's `json.Marshal`
+- Proper escaping of special characters
+- Supports all Go primitive types without reflection
+- Unix timestamp formats (`unix`, `unix_milli`) for time-series databases
+
+## Entry type
+
+The `Entry` type encapsulates all data associated with a single log event. Custom formatters can process this type to implement specialized serialization.
+
+```go
+type Entry struct {
+    Time           time.Time
+    Fields         []any
+    TypedFields    []Field
+    PreEncodedJSON []byte
+    Stack          []uintptr
+    Message        string
+    Prefix         string
+    Caller         string
+    TimeFormat     string
+    Formatter      Formatter
+    Level          Level
+}
+```
+
+### Fields
+
+<ParamField path="Time" type="time.Time">
+  Timestamp when the log entry was created.
+</ParamField>
+
+<ParamField path="Fields" type="[]any">
+  Loosely-typed key-value pairs attached to the log entry. Stored as alternating keys and values.
+</ParamField>
+
+<ParamField path="TypedFields" type="[]Field">
+  Strongly-typed fields created using helper functions like `String()`, `Int()`, etc.
+</ParamField>
+
+<ParamField path="PreEncodedJSON" type="[]byte">
+  Pre-serialized JSON data for fields that are known at logger creation time. Used internally for performance optimization.
+</ParamField>
+
+<ParamField path="Stack" type="[]uintptr">
+  Stack trace program counters when `ReportStacktrace` is enabled.
+</ParamField>
+
+<ParamField path="Message" type="string">
+  The primary log message.
+</ParamField>
+
+<ParamField path="Prefix" type="string">
+  Static prefix prepended to the message.
+</ParamField>
+
+<ParamField path="Caller" type="string">
+  Formatted caller information (file and line number) when `ReportCaller` is enabled.
+</ParamField>
+
+<ParamField path="TimeFormat" type="string">
+  Layout string for formatting timestamps (e.g., `"2006/01/02 15:04:05"` or `"unix"`).
+</ParamField>
+
+<ParamField path="Formatter" type="Formatter">
+  The formatter type that should serialize this entry.
+</ParamField>
+
+<ParamField path="Level" type="Level">
+  The severity level of this log entry.
+</ParamField>
+
+## Custom formatters
+
+While Velo doesn't expose a public formatter interface, you can implement custom serialization by processing the `Entry` type directly:
+
+```go
+import (
+    "encoding/json"
+    "io"
+)
+
+// Custom formatter that adds metadata
+type CustomLogger struct {
+    writer   io.Writer
+    logger   *velo.Logger
+    hostname string
+}
+
+func (c *CustomLogger) Log(level velo.Level, msg string, fields ...any) {
+    // Create a custom structure
+    entry := map[string]any{
+        "timestamp": time.Now().Unix(),
+        "level":     level.String(),
+        "message":   msg,
+        "hostname":  c.hostname,
+        "fields":    fieldsToMap(fields),
+    }
+    
+    data, _ := json.Marshal(entry)
+    c.writer.Write(data)
+    c.writer.Write([]byte("\n"))
+}
+```
+
+## Time formats
+
+Both formatters support multiple timestamp formats:
+
+```go
+// Standard Go time format
+velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter:       velo.JSONFormatter,
+    ReportTimestamp: true,
+    TimeFormat:      time.RFC3339Nano,
+})
+
+// Unix timestamp (seconds)
+velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter:       velo.JSONFormatter,
+    ReportTimestamp: true,
+    TimeFormat:      "unix",
+})
+
+// Unix timestamp (milliseconds)
+velo.NewWithOptions(os.Stdout, &velo.Options{
+    Formatter:       velo.JSONFormatter,
+    ReportTimestamp: true,
+    TimeFormat:      "unix_milli",
+})
+```
+
+## Performance notes
+
+- The JSON formatter uses zero-allocation encoding that bypasses `json.Marshal`
+- The text formatter uses pre-cached, styled level strings to minimize allocations
+- `Entry` objects are pooled and reused to eliminate allocations
+- Pre-encoded JSON fields are calculated once at logger creation for static fields
+
+## Related
+
+- [Logger options](/api/options) - Configure formatters and other logger behavior
+- [Fields](/api/fields) - Add structured data to log entries
+- [Levels](/api/levels) - Control log severity

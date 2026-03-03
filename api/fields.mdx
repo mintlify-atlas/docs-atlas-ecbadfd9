@@ -1,0 +1,414 @@
+---
+title: Fields
+description: Strongly typed field constructors for zero-allocation logging
+---
+
+The `Field` type represents a strongly typed key-value pair that avoids the interface{} boxing overhead associated with standard variadic arguments. Using Fields enables true zero allocation logging on the hot path.
+
+## Field type
+
+```go
+type Field struct {
+    Key  string
+    Str  string
+    Any  any
+    Int  int64
+    Type FieldType
+}
+```
+
+Represents a strongly typed key-value pair for efficient logging.
+
+## FieldType
+
+Identifies the underlying data type of a strongly typed Field.
+
+```go
+type FieldType uint8
+```
+
+### FieldType constants
+
+- `StringType` - Indicates a string field
+- `IntType` - Indicates an integer field
+- `BoolType` - Indicates a boolean field
+- `ErrorType` - Indicates an error field
+- `TimeType` - Indicates a time.Time field
+- `DurationType` - Indicates a time.Duration field
+- `AnyType` - Indicates an arbitrary interface{} field
+- `ObjectType` - Indicates a field implementing ObjectMarshaler
+- `ArrayType` - Indicates a field implementing ArrayMarshaler
+- `IntsType` - Indicates a slice of integers
+- `StringsType` - Indicates a slice of strings
+- `TimesType` - Indicates a slice of time.Time values
+
+## Field constructors
+
+### String
+
+Constructs a Field containing a string value.
+
+```go
+func String(key, val string) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="string">
+  The string value
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("user logged in",
+    velo.String("username", "alice"),
+    velo.String("ip", "192.168.1.1"),
+)
+```
+
+### Int
+
+Constructs a Field containing an integer value.
+
+```go
+func Int(key string, val int) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="int">
+  The integer value
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("request processed",
+    velo.Int("status_code", 200),
+    velo.Int("response_size", 1024),
+)
+```
+
+### Int64
+
+Constructs a Field containing a 64-bit integer value.
+
+```go
+func Int64(key string, val int64) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="int64">
+  The 64-bit integer value
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("processing complete",
+    velo.Int64("bytes_processed", 1073741824),
+)
+```
+
+### Bool
+
+Constructs a Field containing a boolean value.
+
+```go
+func Bool(key string, val bool) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="bool">
+  The boolean value
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("authentication check",
+    velo.Bool("authenticated", true),
+    velo.Bool("admin", false),
+)
+```
+
+### Time
+
+Constructs a Field containing a time.Time value.
+
+```go
+func Time(key string, val time.Time) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="time.Time">
+  The time value
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("event occurred",
+    velo.Time("timestamp", time.Now()),
+    velo.Time("scheduled_at", scheduledTime),
+)
+```
+
+### Duration
+
+Constructs a Field containing a time.Duration value.
+
+```go
+func Duration(key string, val time.Duration) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="time.Duration">
+  The duration value
+</ParamField>
+
+**Example**
+
+```go
+start := time.Now()
+// ... do work ...
+logger.InfoFields("operation completed",
+    velo.Duration("elapsed", time.Since(start)),
+)
+```
+
+### Err
+
+Constructs a Field containing an error value.
+
+```go
+func Err(err error) Field
+```
+
+<ParamField path="err" type="error">
+  The error value
+</ParamField>
+
+Automatically uses the key "error".
+
+**Example**
+
+```go
+if err := db.Connect(); err != nil {
+    logger.ErrorFields("database connection failed", velo.Err(err))
+}
+```
+
+### Any
+
+Constructs a Field containing an arbitrary interface{} value.
+
+```go
+func Any(key string, val any) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="any">
+  The arbitrary value
+</ParamField>
+
+**Performance Note:** Using Any incurs allocation overhead due to interface boxing. Prefer strongly typed constructors (like String or Int) when possible.
+
+**Example**
+
+```go
+logger.InfoFields("complex data",
+    velo.Any("config", map[string]string{"env": "production"}),
+)
+```
+
+### Object
+
+Constructs a Field containing an ObjectMarshaler.
+
+```go
+func Object(key string, val ObjectMarshaler) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="ObjectMarshaler">
+  The object implementing ObjectMarshaler
+</ParamField>
+
+Use this to log complex structs with zero allocations.
+
+**Example**
+
+```go
+type User struct {
+    ID   int
+    Name string
+}
+
+func (u User) MarshalLogObject(enc velo.ObjectEncoder) error {
+    enc.AddInt("id", u.ID)
+    enc.AddString("name", u.Name)
+    return nil
+}
+
+user := User{ID: 123, Name: "Alice"}
+logger.InfoFields("user created", velo.Object("user", user))
+```
+
+### Array
+
+Constructs a Field containing an ArrayMarshaler.
+
+```go
+func Array(key string, val ArrayMarshaler) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="ArrayMarshaler">
+  The array implementing ArrayMarshaler
+</ParamField>
+
+Use this to log collections with zero allocations.
+
+**Example**
+
+```go
+type UserIDs []int
+
+func (ids UserIDs) MarshalLogArray(enc velo.ArrayEncoder) error {
+    for _, id := range ids {
+        enc.AppendInt(id)
+    }
+    return nil
+}
+
+ids := UserIDs{1, 2, 3, 4, 5}
+logger.InfoFields("processing users", velo.Array("user_ids", ids))
+```
+
+## Slice field constructors
+
+### Ints
+
+Constructs a Field containing a slice of integers.
+
+```go
+func Ints(key string, val []int) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="[]int">
+  The integer slice
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("scores recorded",
+    velo.Ints("values", []int{95, 87, 92, 88}),
+)
+```
+
+### Strings
+
+Constructs a Field containing a slice of strings.
+
+```go
+func Strings(key string, val []string) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="[]string">
+  The string slice
+</ParamField>
+
+**Example**
+
+```go
+logger.InfoFields("tags assigned",
+    velo.Strings("tags", []string{"important", "urgent", "review"}),
+)
+```
+
+### Times
+
+Constructs a Field containing a slice of time.Time values.
+
+```go
+func Times(key string, val []time.Time) Field
+```
+
+<ParamField path="key" type="string">
+  The field key
+</ParamField>
+
+<ParamField path="val" type="[]time.Time">
+  The time slice
+</ParamField>
+
+**Example**
+
+```go
+timestamps := []time.Time{
+    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+}
+logger.InfoFields("events recorded",
+    velo.Times("event_times", timestamps),
+)
+```
+
+## Performance considerations
+
+Strongly typed fields provide the best performance:
+
+```go
+// Fastest - zero allocations
+logger.InfoFields("request",
+    velo.String("method", "GET"),
+    velo.Int("status", 200),
+)
+
+// Slower - uses reflection and allocations
+logger.Info("request", "method", "GET", "status", 200)
+
+// Slowest - multiple allocations from Any
+logger.InfoFields("request",
+    velo.Any("method", "GET"),
+    velo.Any("status", 200),
+)
+```
+
+For maximum performance in hot paths, always prefer strongly typed field constructors over loosely typed key-value pairs or the `Any` constructor.

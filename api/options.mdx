@@ -1,0 +1,510 @@
+---
+title: Options
+description: Configuration options for customizing logger behavior
+---
+
+The `Options` struct configures the behavior of a new Logger. Pass it to `NewWithOptions` to customize logging behavior, including asynchronous writing, formatting, and field extraction.
+
+## Options struct
+
+```go
+type Options struct {
+    Level              Level
+    Output             io.Writer
+    BufferSize         int
+    OverflowStrategy   OverflowStrategy
+    ReportTimestamp    bool
+    TimeFormat         string
+    TimeFunction       TimeFunction
+    ReportCaller       bool
+    CallerOffset       int
+    CallerFormatter    CallerFormatter
+    ReportStacktrace   bool
+    Prefix             string
+    Fields             []any
+    Formatter          Formatter
+    ContextExtractor   ContextExtractor
+    Async              bool
+}
+```
+
+## Configuration fields
+
+### Level
+
+Sets the minimum logging priority. The Logger discards entries below this level.
+
+```go
+Level Level
+```
+
+**Default:** `InfoLevel`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Level: velo.DebugLevel,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### Output
+
+Specifies the destination for log data.
+
+```go
+Output io.Writer
+```
+
+**Deprecated:** Pass the io.Writer directly to NewWithOptions instead.
+
+### BufferSize
+
+Defines the capacity of the internal ring buffer for asynchronous loggers. Must be a power of 2.
+
+```go
+BufferSize int
+```
+
+**Default:** `8192`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Async:      true,
+    BufferSize: 16384,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### OverflowStrategy
+
+Dictates behavior when the asynchronous buffer fills up.
+
+```go
+OverflowStrategy OverflowStrategy
+```
+
+**Values:**
+- `OverflowSync` - Forces synchronous writes when buffer is full (default)
+- `OverflowDrop` - Discards new log entries until space is available
+- `OverflowBlock` - Pauses calling goroutine until space is available
+
+**Default:** `OverflowSync`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Async:            true,
+    OverflowStrategy: velo.OverflowDrop,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### ReportTimestamp
+
+Includes a timestamp in every log entry.
+
+```go
+ReportTimestamp bool
+```
+
+**Default:** `false`
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportTimestamp: true,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### TimeFormat
+
+Specifies the layout string for timestamps.
+
+```go
+TimeFormat string
+```
+
+**Default:** `"2006/01/02 15:04:05"` (DefaultTimeFormat)
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportTimestamp: true,
+    TimeFormat:      "2006-01-02T15:04:05.000Z07:00",
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### TimeFunction
+
+Provides a custom hook for generating timestamps.
+
+```go
+TimeFunction TimeFunction
+```
+
+**Type:** `func(time.Time) time.Time`
+
+**Default:** `time.Now`
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportTimestamp: true,
+    TimeFunction: func(t time.Time) time.Time {
+        return t.UTC()
+    },
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### ReportCaller
+
+Includes the calling file and line number in every log entry.
+
+```go
+ReportCaller bool
+```
+
+**Default:** `false`
+
+**Performance Note:** Enabling this incurs a significant performance penalty.
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportCaller: true,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+// Logs will include caller info like "main.go:42"
+```
+
+### CallerOffset
+
+Adjusts the stack frame depth when identifying the caller. Use this if you wrap the Logger in custom helper functions.
+
+```go
+CallerOffset int
+```
+
+**Default:** `0`
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportCaller: true,
+    CallerOffset: 2,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### CallerFormatter
+
+Provides a custom hook for formatting caller information.
+
+```go
+CallerFormatter CallerFormatter
+```
+
+**Type:** `func(file string, line int, funcName string) string`
+
+**Default:** `ShortCallerFormatter`
+
+**Built-in formatters:**
+- `ShortCallerFormatter` - Returns "filename.go:42"
+- `LongCallerFormatter` - Returns "/full/path/to/filename.go:42"
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportCaller:    true,
+    CallerFormatter: velo.LongCallerFormatter,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### ReportStacktrace
+
+Includes a full stack trace for entries at ErrorLevel or higher.
+
+```go
+ReportStacktrace bool
+```
+
+**Default:** `false`
+
+**Performance Note:** Enabling this incurs a significant performance penalty on errors.
+
+**Example**
+
+```go
+opts := velo.Options{
+    ReportStacktrace: true,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### Prefix
+
+Prepends a static string to every log message.
+
+```go
+Prefix string
+```
+
+**Default:** `""`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Prefix: "[API]",
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+logger.Info("server started")
+// Output: [API] server started
+```
+
+### Fields
+
+Attaches default, loosely typed key-value pairs to every log entry.
+
+```go
+Fields []any
+```
+
+**Default:** `nil`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Fields: []any{"service", "api-gateway", "version", "1.0.0"},
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+logger.Info("request processed")
+// Includes service and version fields in every log
+```
+
+### Formatter
+
+Dictates how the Logger serializes entries.
+
+```go
+Formatter Formatter
+```
+
+**Values:**
+- `TextFormatter` - Human readable, colorized text (default)
+- `JSONFormatter` - Structured JSON output
+
+**Default:** `TextFormatter`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Formatter: velo.JSONFormatter,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+```
+
+### ContextExtractor
+
+Provides a custom hook to pull fields from a context.Context.
+
+```go
+ContextExtractor ContextExtractor
+```
+
+**Type:** `func(context.Context) []Field`
+
+**Default:** `nil`
+
+**Example**
+
+```go
+opts := velo.Options{
+    ContextExtractor: func(ctx context.Context) []velo.Field {
+        if reqID, ok := ctx.Value("request_id").(string); ok {
+            return []velo.Field{velo.String("request_id", reqID)}
+        }
+        return nil
+    },
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+
+ctx := context.WithValue(context.Background(), "request_id", "abc123")
+logger.LogContext(ctx, velo.InfoLevel, "processing request")
+// Automatically includes request_id field
+```
+
+### Async
+
+Enables the background worker, routing logs through a lock-free ring buffer.
+
+```go
+Async bool
+```
+
+**Default:** `false`
+
+**Example**
+
+```go
+opts := velo.Options{
+    Async:            true,
+    BufferSize:       16384,
+    OverflowStrategy: velo.OverflowSync,
+}
+logger := velo.NewWithOptions(os.Stdout, opts)
+defer logger.Close() // Important: flush async logs on shutdown
+```
+
+## Related types
+
+### Formatter
+
+Defines the serialization format for log entries.
+
+```go
+type Formatter int
+```
+
+**Constants:**
+- `TextFormatter` - Human readable, colorized text
+- `JSONFormatter` - Structured JSON
+
+### OverflowStrategy
+
+Dictates how an asynchronous Logger behaves when its internal ring buffer fills up.
+
+```go
+type OverflowStrategy int
+```
+
+**Constants:**
+- `OverflowSync` - Forces synchronous writes, guarantees no log loss
+- `OverflowDrop` - Discards new entries, prioritizes performance
+- `OverflowBlock` - Pauses calling goroutine, guarantees no log loss
+
+### TimeFunction
+
+Defines a custom hook for generating or modifying timestamps.
+
+```go
+type TimeFunction func(time.Time) time.Time
+```
+
+**Example**
+
+```go
+utcTime := func(t time.Time) time.Time {
+    return t.UTC()
+}
+
+opts := velo.Options{
+    TimeFunction: utcTime,
+}
+```
+
+### CallerFormatter
+
+Defines a custom hook for formatting file and line number information.
+
+```go
+type CallerFormatter func(file string, line int, funcName string) string
+```
+
+**Built-in implementations:**
+
+#### ShortCallerFormatter
+
+Returns the file name and line number (e.g., "logger.go:42").
+
+```go
+func ShortCallerFormatter(file string, line int, funcName string) string
+```
+
+#### LongCallerFormatter
+
+Returns the absolute file path and line number (e.g., "/path/to/logger.go:42").
+
+```go
+func LongCallerFormatter(file string, line int, funcName string) string
+```
+
+### ContextExtractor
+
+Defines a custom hook for extracting strongly typed fields from a context.Context.
+
+```go
+type ContextExtractor func(context.Context) []Field
+```
+
+**Example**
+
+```go
+func extractRequestFields(ctx context.Context) []velo.Field {
+    var fields []velo.Field
+    
+    if reqID, ok := ctx.Value("request_id").(string); ok {
+        fields = append(fields, velo.String("request_id", reqID))
+    }
+    
+    if userID, ok := ctx.Value("user_id").(int); ok {
+        fields = append(fields, velo.Int("user_id", userID))
+    }
+    
+    return fields
+}
+
+opts := velo.Options{
+    ContextExtractor: extractRequestFields,
+}
+```
+
+## Complete example
+
+```go
+package main
+
+import (
+    "os"
+    "time"
+    "github.com/blairtcg/velo"
+)
+
+func main() {
+    opts := velo.Options{
+        Level:            velo.DebugLevel,
+        ReportTimestamp:  true,
+        TimeFormat:       time.RFC3339,
+        ReportCaller:     false,
+        ReportStacktrace: false,
+        Formatter:        velo.JSONFormatter,
+        Async:            true,
+        BufferSize:       16384,
+        OverflowStrategy: velo.OverflowSync,
+        Prefix:           "[MyApp]",
+        Fields:           []any{"service", "web-api", "version", "2.0.0"},
+    }
+    
+    logger := velo.NewWithOptions(os.Stdout, opts)
+    defer logger.Close()
+    
+    logger.Info("application started successfully")
+}
+```

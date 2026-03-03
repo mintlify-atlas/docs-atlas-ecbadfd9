@@ -1,0 +1,420 @@
+---
+title: Performance
+description: Optimize Velo for high-throughput applications with benchmarks and best practices
+---
+
+Velo is designed for performance-critical applications. This guide covers benchmarks, optimization techniques, and best practices for maximum throughput.
+
+## Benchmark results
+
+All benchmarks compare Velo against popular Go logging libraries. Lower is better.
+
+### Logging 10 fields
+
+Logging a message with 10 structured fields:
+
+| Package | Time | vs zap | Allocations |
+|---------|------|--------|-------------|
+| **velo (fields)** | **513 ns/op** | **-22%** | **1 allocs/op** |
+| **velo** | **591 ns/op** | **-10%** | **6 allocs/op** |
+| zap | 656 ns/op | baseline | 5 allocs/op |
+| zap (sugared) | 856 ns/op | +30% | 10 allocs/op |
+| apex/log | 1924 ns/op | +193% | 60 allocs/op |
+| zerolog | 2144 ns/op | +227% | 38 allocs/op |
+| slog | 2700 ns/op | +312% | 41 allocs/op |
+| logrus | 3104 ns/op | +373% | 76 allocs/op |
+
+<Note>
+Velo's typed fields API is **22% faster** than zap and uses only 1 allocation.
+</Note>
+
+### Logging with 10 context fields
+
+Logging with pre-attached context fields (e.g., request ID, user ID):
+
+| Package | Time | vs zap | Allocations |
+|---------|------|--------|-------------|
+| zerolog | 18 ns/op | -73% | 0 allocs/op |
+| **velo (fields)** | **55 ns/op** | **-18%** | **0 allocs/op** |
+| **velo** | **57 ns/op** | **-15%** | **0 allocs/op** |
+| zap | 67 ns/op | baseline | 0 allocs/op |
+| zap (sugared) | 70 ns/op | +4% | 0 allocs/op |
+| slog | 90 ns/op | +34% | 0 allocs/op |
+| apex/log | 1924 ns/op | +2772% | 50 allocs/op |
+| logrus | 2199 ns/op | +3182% | 65 allocs/op |
+
+<Tip>
+Pre-encoding context fields eliminates allocation overhead. Use `With()` or `WithFields()` to attach request-scoped data.
+</Tip>
+
+### Logging a static string
+
+Logging a simple message with no fields:
+
+| Package | Time | vs zap | Allocations |
+|---------|------|--------|-------------|
+| stdlib | 4 ns/op | -94% | 1 allocs/op |
+| zerolog | 16 ns/op | -75% | 0 allocs/op |
+| **velo** | **48 ns/op** | **-24%** | **0 allocs/op** |
+| zap | 63 ns/op | baseline | 0 allocs/op |
+| slog | 82 ns/op | +30% | 0 allocs/op |
+| apex/log | 148 ns/op | +135% | 4 allocs/op |
+| logrus | 272 ns/op | +332% | 20 allocs/op |
+
+## Performance optimization tips
+
+### 1. Use typed fields
+
+Typed fields eliminate interface boxing:
+
+<Tabs>
+  <Tab title="Slow (boxing overhead)">
+    ```go
+    logger.Info("request completed",
+      "method", "GET",
+      "status", 200,
+      "duration", duration,
+    )
+    // 591 ns/op, 6 allocs/op
+    ```
+  </Tab>
+  
+  <Tab title="Fast (zero allocations)">
+    ```go
+    logger.InfoFields("request completed",
+      velo.String("method", "GET"),
+      velo.Int("status", 200),
+      velo.Duration("duration", duration),
+    )
+    // 513 ns/op, 1 allocs/op (22% faster)
+    ```
+  </Tab>
+</Tabs>
+
+### 2. Enable async mode
+
+Async mode moves I/O to a background worker:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Async: true,
+  BufferSize: 8192, // Power of 2
+})
+defer logger.Close()
+
+// Logs are formatted on caller goroutine, written asynchronously
+logger.Info("non-blocking")
+```
+
+**Benefits:**
+- Isolates application from I/O latency
+- Parallelizes formatting and writing
+- Reduces blocking in hot paths
+
+**Trade-offs:**
+- Must call `Close()` to flush buffer
+- Requires memory for buffer
+- Can apply backpressure under extreme load
+
+### 3. Pre-encode context fields
+
+Velo automatically pre-encodes fields when using JSON formatter:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Formatter: velo.JSONFormatter,
+})
+
+// Creates a child logger with pre-encoded fields
+requestLogger := logger.WithFields(
+  velo.String("request_id", requestID),
+  velo.String("user_id", userID),
+)
+
+// Subsequent logs reuse pre-encoded JSON
+requestLogger.Info("event 1") // 55 ns/op, 0 allocs
+requestLogger.Info("event 2") // 55 ns/op, 0 allocs
+```
+
+### 4. Set appropriate log levels
+
+Filtering at the logger level is faster than filtering in aggregators:
+
+```go
+// Production: only errors and above
+logger.SetLevel(velo.ErrorLevel)
+
+// Development: all logs
+logger.SetLevel(velo.DebugLevel)
+
+// These are discarded immediately with zero overhead
+logger.Debug("not logged in production")
+logger.Info("not logged in production")
+```
+
+### 5. Avoid caller and stack traces in hot paths
+
+Both features use `runtime.Caller` which is expensive:
+
+```go
+// Slow: captures caller on every log
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportCaller: true,     // Adds ~500ns per log
+  ReportStacktrace: true, // Adds ~2000ns on errors
+})
+
+// Fast: disabled by default
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportCaller: false,
+  ReportStacktrace: false,
+})
+```
+
+<Warning>
+Only enable caller reporting and stack traces during debugging or in low-throughput environments.
+</Warning>
+
+### 6. Choose the right overflow strategy
+
+Balance between log loss and latency:
+
+<Tabs>
+  <Tab title="OverflowSync (balanced)">
+    ```go
+    velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowSync, // Default
+    }
+    // Temporarily blocks when buffer full
+    // Guarantees no log loss
+    // Recommended for most applications
+    ```
+  </Tab>
+  
+  <Tab title="OverflowDrop (low latency)">
+    ```go
+    velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowDrop,
+    }
+    // Never blocks
+    // May lose logs under extreme load
+    // Best for latency-critical systems
+    ```
+  </Tab>
+  
+  <Tab title="OverflowBlock (no loss)">
+    ```go
+    velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowBlock,
+    }
+    // Always blocks when buffer full
+    // Zero log loss
+    // Can severely impact application latency
+    ```
+  </Tab>
+</Tabs>
+
+### 7. Size your buffer appropriately
+
+Buffer size affects memory usage and backpressure behavior:
+
+```go
+// Small buffer: 1024 entries (~8KB)
+// Good for: Low log volume, memory-constrained environments
+velo.Options{
+  Async: true,
+  BufferSize: 1024,
+}
+
+// Default buffer: 8192 entries (~64KB)
+// Good for: Most applications
+velo.Options{
+  Async: true,
+  BufferSize: 8192, // Default
+}
+
+// Large buffer: 32768 entries (~256KB)
+// Good for: High log volume, burst traffic
+velo.Options{
+  Async: true,
+  BufferSize: 32768,
+}
+```
+
+<Note>
+Buffer size must be a power of 2. Velo uses a lock-free ring buffer for maximum throughput.
+</Note>
+
+### 8. Disable timestamps in log aggregators
+
+If your log aggregator adds timestamps, disable them in Velo:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportTimestamp: false, // Save ~20ns per log
+})
+```
+
+### 9. Use JSON formatter in production
+
+JSON is faster to parse in aggregators and more efficient to generate:
+
+```go
+// Production
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Formatter: velo.JSONFormatter,
+})
+
+// Development
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Formatter: velo.TextFormatter, // Colorized, human-readable
+})
+```
+
+## Real-world performance example
+
+Here's a high-performance configuration for a production API:
+
+```go
+package main
+
+import (
+  "context"
+  "os"
+  "time"
+  
+  "github.com/blairtcg/velo"
+)
+
+func main() {
+  logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    // Minimum level
+    Level: velo.InfoLevel,
+    
+    // Async for performance
+    Async: true,
+    BufferSize: 8192,
+    OverflowStrategy: velo.OverflowSync,
+    
+    // JSON for aggregators
+    Formatter: velo.JSONFormatter,
+    
+    // Timestamps enabled
+    ReportTimestamp: true,
+    TimeFormat: time.RFC3339,
+    
+    // Performance: disabled
+    ReportCaller: false,
+    ReportStacktrace: false,
+    
+    // Service metadata
+    Fields: []any{
+      "service", "api",
+      "version", "2.0.0",
+    },
+  })
+  defer logger.Close()
+  
+  // High-throughput request handler
+  handleRequest(logger)
+}
+
+func handleRequest(logger *velo.Logger) {
+  start := time.Now()
+  
+  // Use typed fields for zero allocations
+  logger.InfoFields("request started",
+    velo.String("endpoint", "/api/users"),
+    velo.String("method", "GET"),
+  )
+  
+  // Simulate work
+  processRequest()
+  
+  // Log completion with duration
+  logger.InfoFields("request completed",
+    velo.Duration("duration", time.Since(start)),
+    velo.Int("status", 200),
+  )
+}
+
+func processRequest() {
+  time.Sleep(10 * time.Millisecond)
+}
+```
+
+## Performance checklist
+
+Use this checklist to ensure optimal performance:
+
+<AccordionGroup>
+  <Accordion title="Use typed fields in hot paths">
+    ✅ Replace `logger.Info(key, val)` with `logger.InfoFields(velo.Type(key, val))`
+    
+    ✅ Avoid `Any()` field type unless necessary
+  </Accordion>
+  
+  <Accordion title="Enable async mode">
+    ✅ Set `Async: true` for production
+    
+    ✅ Choose appropriate `BufferSize` (default 8192)
+    
+    ✅ Always call `defer logger.Close()`
+  </Accordion>
+  
+  <Accordion title="Optimize formatters">
+    ✅ Use `JSONFormatter` in production
+    
+    ✅ Use `TextFormatter` in development
+  </Accordion>
+  
+  <Accordion title="Pre-encode context fields">
+    ✅ Use `WithFields()` for request-scoped loggers
+    
+    ✅ Attach service metadata via `Options.Fields`
+  </Accordion>
+  
+  <Accordion title="Disable expensive features">
+    ✅ Set `ReportCaller: false` unless debugging
+    
+    ✅ Set `ReportStacktrace: false` unless debugging errors
+  </Accordion>
+  
+  <Accordion title="Filter at the source">
+    ✅ Set appropriate `Level` (e.g., `InfoLevel` in production)
+    
+    ✅ Avoid logging in tight loops
+  </Accordion>
+</AccordionGroup>
+
+## Profiling your application
+
+Use Go's profiling tools to identify logging bottlenecks:
+
+```bash
+# CPU profiling
+go test -cpuprofile=cpu.prof -bench=.
+go tool pprof cpu.prof
+
+# Memory profiling
+go test -memprofile=mem.prof -bench=.
+go tool pprof mem.prof
+```
+
+Look for time spent in:
+- `velo.(*Logger).InfoFields` - Hot path logging
+- `runtime.Caller` - Indicates caller reporting enabled
+- `runtime.Callers` - Indicates stack trace capture
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Learn all available configuration options
+  </Card>
+  <Card title="Typed fields" icon="code" href="/guides/typed-fields">
+    Master the typed fields API
+  </Card>
+</CardGroup>

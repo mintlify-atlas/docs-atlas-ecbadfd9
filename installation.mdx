@@ -1,0 +1,116 @@
+---
+title: Installation
+description: Get started with Velo in your Go project
+---
+
+## Requirements
+
+Velo requires Go 1.26 or later.
+
+## Install with go get
+
+<Steps>
+  <Step title="Add Velo to your project">
+    Run the following command in your project directory:
+    
+    ```bash
+    go get github.com/blairtcg/velo
+    ```
+  </Step>
+  
+  <Step title="Import in your code">
+    Add the import statement to your Go files:
+    
+    ```go
+    import "github.com/blairtcg/velo"
+    ```
+  </Step>
+  
+  <Step title="Verify installation">
+    Create a simple logger to verify everything works:
+    
+    ```go
+    package main
+    
+    import "github.com/blairtcg/velo"
+    
+    func main() {
+        logger := velo.New(nil)
+        defer logger.Close()
+        
+        logger.Info("Velo is installed and ready")
+    }
+    ```
+  </Step>
+</Steps>
+
+## Type signatures
+
+### Creating a logger
+
+```go
+// New constructs a new Logger writing to the provided io.Writer.
+// It applies the default Options. If the provided writer is nil, it defaults
+// to standard error.
+func New(w io.Writer) *Logger
+
+// NewWithOptions constructs a new Logger using the specified Options.
+// It provides full control over the Logger's behavior, including asynchronous
+// writing, formatting, and field extraction.
+func NewWithOptions(w io.Writer, o Options) *Logger
+```
+
+### Options structure
+
+```go
+type Options struct {
+    // Level sets the minimum logging priority
+    Level Level
+    
+    // BufferSize defines the capacity of the internal ring buffer
+    // for asynchronous loggers. Must be a power of 2. Defaults to 8192.
+    BufferSize int
+    
+    // OverflowStrategy dictates behavior when the buffer fills up
+    // Defaults to OverflowSync
+    OverflowStrategy OverflowStrategy
+    
+    // ReportTimestamp includes a timestamp in every log entry
+    ReportTimestamp bool
+    
+    // TimeFormat specifies the layout string for timestamps
+    // Defaults to "2006/01/02 15:04:05"
+    TimeFormat string
+    
+    // ReportCaller includes the calling file and line number
+    // Note: Enabling this incurs a significant performance penalty
+    ReportCaller bool
+    
+    // ReportStacktrace includes a full stack trace for ErrorLevel or higher
+    // Note: Enabling this incurs a significant performance penalty on errors
+    ReportStacktrace bool
+    
+    // Prefix prepends a static string to every log message
+    Prefix string
+    
+    // Fields attaches default key-value pairs to every log entry
+    Fields []any
+    
+    // Formatter dictates serialization (TextFormatter or JSONFormatter)
+    // Defaults to TextFormatter
+    Formatter Formatter
+    
+    // Async enables the background worker with lock-free ring buffer
+    Async bool
+}
+```
+
+<Note>
+  The `New()` function defaults to writing to `os.Stderr` if you pass `nil`. For production use, consider using `NewWithOptions()` to configure async mode and JSON formatting.
+</Note>
+
+## Next steps
+
+<Card title="Quick start guide" icon="rocket" href="/quickstart">
+  Learn how to use Velo with real code examples
+</Card>

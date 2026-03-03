@@ -1,0 +1,164 @@
+---
+title: Basic usage
+description: Learn how to use Velo's core logging methods with Info, Debug, Error, and other log levels
+---
+
+Velo provides a clean, developer-friendly API for structured logging. This guide covers the essential logging methods and how to use them effectively.
+
+## Creating a logger
+
+The simplest way to get started is with the `New` function, which creates a logger writing to the provided `io.Writer`:
+
+```go
+logger := velo.New(os.Stderr)
+defer logger.Close() // Always flush the buffer before exit
+```
+
+For quick debugging or simple applications, you can use the global default logger:
+
+```go
+velo.Info("application started")
+velo.Debug("debug information", "version", "1.0.0")
+```
+
+<Note>
+Always call `Close()` on your logger before your application exits to ensure all buffered logs are written. Failing to close the logger may result in lost log entries.
+</Note>
+
+## Log levels
+
+Velo supports standard log levels from most to least verbose:
+
+<Steps>
+  <Step title="Debug">
+    Use for detailed diagnostic information during development:
+    
+    ```go
+    logger.Debug("processing request", "endpoint", "/api/users")
+    ```
+  </Step>
+  
+  <Step title="Info">
+    Use for general informational messages:
+    
+    ```go
+    logger.Info("server started", "port", 8080)
+    ```
+  </Step>
+  
+  <Step title="Warn">
+    Use for potentially harmful situations:
+    
+    ```go
+    logger.Warn("high memory usage", "usage", "85%")
+    ```
+  </Step>
+  
+  <Step title="Error">
+    Use for error events that might still allow the application to continue:
+    
+    ```go
+    logger.Error("failed to connect to database", "error", err)
+    ```
+  </Step>
+  
+  <Step title="Panic">
+    Logs a message then calls `panic()`:
+    
+    ```go
+    logger.Panic("critical failure", "component", "auth")
+    ```
+  </Step>
+  
+  <Step title="Fatal">
+    Logs a message then calls `os.Exit(1)`:
+    
+    ```go
+    logger.Fatal("cannot recover", "reason", "config missing")
+    ```
+  </Step>
+</Steps>
+
+## Logging with fields
+
+Velo accepts loosely-typed key-value pairs for structured logging:
+
+```go
+logger.Info("failed to fetch URL",
+  "url", url,
+  "attempt", 3,
+  "backoff", time.Second,
+)
+```
+
+Fields are always provided as alternating key-value pairs. The keys should be strings, and values can be any type.
+
+<Tip>
+For maximum performance and zero allocations, use the strongly-typed fields API covered in the [typed fields guide](/guides/typed-fields).
+</Tip>
+
+## Formatted logging
+
+For situations where you need string formatting, use the `*f` methods:
+
+```go
+logger.Infof("processing %d items from %s", count, source)
+logger.Errorf("connection failed after %d attempts", retries)
+```
+
+<Warning>
+Formatted logging methods use `fmt.Sprintf` internally, which incurs allocation overhead. Avoid using these in performance-critical paths.
+</Warning>
+
+## Dynamic log levels
+
+You can change the minimum log level at runtime:
+
+```go
+logger.SetLevel(velo.DebugLevel) // Show all debug logs
+logger.SetLevel(velo.WarnLevel)  // Only show warnings and above
+```
+
+The logger discards any messages below the configured level, which helps reduce overhead in production.
+
+## Default logger operations
+
+Velo provides package-level functions that operate on the global default logger:
+
+```go
+velo.Info("using default logger")
+velo.SetLevel(velo.ErrorLevel)
+velo.Debug("this won't appear") // Below ErrorLevel
+```
+
+You can replace the default logger:
+
+```go
+customLogger := velo.NewWithOptions(os.Stdout, velo.Options{
+  ReportTimestamp: true,
+  Formatter: velo.JSONFormatter,
+})
+velo.SetDefault(customLogger)
+```
+
+## Flushing logs
+
+For asynchronous loggers, use `Sync()` to flush buffered entries immediately:
+
+```go
+logger.Error("critical error occurred", "error", err)
+logger.Sync() // Ensure the error is written immediately
+```
+
+This is particularly useful before application shutdown or after logging critical errors.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Typed fields" icon="code" href="/guides/typed-fields">
+    Use strongly-typed fields for zero-allocation logging
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure formatters, timestamps, and advanced options
+  </Card>
+</CardGroup>

@@ -1,0 +1,186 @@
+---
+title: Overflow strategies
+description: Configure how Velo handles backpressure when the async buffer fills up
+---
+
+In high throughput scenarios, your application might generate logs faster than the output stream can write them. When the async buffer fills up, Velo applies an overflow strategy to handle the backpressure.
+
+## Understanding overflow
+
+The async worker (worker.go:64) uses a buffered channel with a configurable capacity:
+
+```go
+queue: make(chan *buffer, cap)
+```
+
+When this channel is full, the `submit()` method (worker.go:100-118) detects overflow:
+
+```go
+select {
+case w.queue <- b:
+    return
+default:
+    // Fall through to overflow handling
+}
+```
+
+The `default` case executes when the channel cannot accept new entries immediately.
+
+## Available strategies
+
+Velo provides three overflow strategies (options.go:42-56) that balance performance, reliability, and latency differently.
+
+### OverflowSync (default)
+
+```go
+velo.Options{
+    OverflowStrategy: velo.OverflowSync,
+}
+```
+
+When the buffer is full, the logger writes directly to the underlying output stream, bypassing the queue (worker.go:113-116):
+
+```go
+case OverflowSync:
+    // Write directly to output
+    w.output.Write(b.B)
+    putBuffer(b)
+```
+
+**Behavior**:
+- Guarantees no logs are lost
+- Temporarily blocks the calling goroutine during direct writes
+- Prevents unbounded memory growth
+- Automatically resumes async operation when buffer drains
+
+**Use when**:
+- Log completeness is critical
+- You need guaranteed delivery without manual queue monitoring
+- Temporary latency spikes are acceptable
+
+<Info>
+**OverflowSync** is the default strategy (options.go:91) because it balances reliability and performance. Most applications tolerate occasional synchronous writes during extreme load.
+</Info>
+
+### OverflowDrop
+
+```go
+velo.Options{
+    OverflowStrategy: velo.OverflowDrop,
+}
+```
+
+When the buffer is full, the logger discards new log entries (worker.go:109-110):
+
+```go
+case OverflowDrop:
+    putBuffer(b)
+```
+
+**Behavior**:
+- Prioritizes application performance over log completeness
+- Never blocks the calling goroutine
+- Silently discards entries until buffer space becomes available
+- Lost logs are not recoverable
+
+**Use when**:
+- Maintaining low latency is more critical than logging every event
+- Your monitoring can tolerate gaps in log data
+- You're logging high-frequency metrics where sampling is acceptable
+
+<Warning>
+With **OverflowDrop**, you may lose critical error messages during traffic spikes. Monitor your buffer utilization to detect when logs are being dropped.
+</Warning>
+
+### OverflowBlock
+
+```go
+velo.Options{
+    OverflowStrategy: velo.OverflowBlock,
+}
+```
+
+When the buffer is full, the calling goroutine blocks until space becomes available (worker.go:111-112):
+
+```go
+case OverflowBlock:
+    w.queue <- b
+```
+
+**Behavior**:
+- Guarantees no logs are lost
+- Blocks the calling goroutine indefinitely if the worker cannot keep up
+- Can severely impact application latency and throughput
+- May cause cascading failures if many goroutines block on logging
+
+**Use when**:
+- Absolute log completeness is required (audit logs, compliance)
+- You have strict guarantees about output stream throughput
+- Your application can tolerate blocking on logging operations
+
+<Warning>
+**OverflowBlock** can cause severe performance degradation. If the output stream is slow or blocked, your entire application may freeze waiting to log messages.
+</Warning>
+
+## Configuring buffer size
+
+The buffer size (options.go:87-88) controls how many log entries can queue before overflow occurs:
+
+```go
+velo.Options{
+    BufferSize: 8192, // Default
+    OverflowStrategy: velo.OverflowSync,
+}
+```
+
+**Guidelines**:
+- Larger buffers absorb traffic spikes better but use more memory
+- Smaller buffers reduce memory usage but overflow more frequently
+- Buffer size must be a power of 2
+- Default 8192 entries is sufficient for most applications
+
+<Info>
+Each buffer entry is a reference to a pooled byte slice, not the full log message. The memory overhead is approximately `BufferSize * 8 bytes` for the channel itself.
+</Info>
+
+## Overflow in practice
+
+Here's how the three strategies behave during a traffic spike:
+
+```go
+// Your application suddenly logs 20,000 entries/second
+// Buffer capacity: 8192 entries
+// Worker throughput: 15,000 entries/second
+```
+
+| Strategy | Behavior |
+|----------|----------|
+| **OverflowSync** | First 8192 entries queue async. Entries 8193+ write synchronously until buffer drains. No data loss. |
+| **OverflowDrop** | First 8192 entries queue async. Entries 8193+ are discarded. Approximately 25% data loss. |
+| **OverflowBlock** | First 8192 entries queue async. Entries 8193+ block until worker processes earlier entries. Severe latency. |
+
+## Monitoring overflow
+
+Velo does not currently expose metrics for overflow events. To detect overflow issues:
+
+1. **OverflowSync**: Monitor application latency for spikes correlating with high log volume
+2. **OverflowDrop**: Compare log volume at source with log volume at destination
+3. **OverflowBlock**: Monitor goroutine counts and application throughput
+
+## Choosing a strategy
+
+Decision tree:
+
+1. **Do you need every log entry?**
+   - Yes → `OverflowSync` or `OverflowBlock`
+   - No → `OverflowDrop`
+
+2. **Can your application tolerate blocking on logging?**
+   - Yes → `OverflowBlock`
+   - No → `OverflowSync`
+
+3. **Is low latency more important than log completeness?**
+   - Yes → `OverflowDrop`
+   - No → `OverflowSync` (default)
+
+For most applications, **OverflowSync** provides the best balance.

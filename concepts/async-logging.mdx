@@ -1,0 +1,165 @@
+---
+title: Async logging
+description: Learn how Velo's background worker model achieves high performance without blocking your application
+---
+
+Velo uses asynchronous logging to keep your application fast by offloading I/O operations to a background goroutine. This prevents log writes from blocking your hot paths.
+
+## Architecture overview
+
+The async system consists of three main components:
+
+1. **Buffered channel**: A queue that holds formatted log entries (worker.go:51)
+2. **Background worker**: A goroutine that consumes entries and writes to output (worker.go:50-60)
+3. **Buffered writer**: A 64KB buffer that batches writes to reduce syscalls (worker.go:67)
+
+### How it works
+
+When you log a message with async enabled:
+
+1. Velo formats the log entry on your goroutine (zero-copy where possible)
+2. The formatted buffer is sent to the worker's channel
+3. Your goroutine continues immediately without waiting for I/O
+4. The background worker writes batches of logs to the output stream
+
+<Info>
+The default buffer size is 8192 entries. You can configure this via `Options.BufferSize` (options.go:87-88). The buffer size must be a power of 2.
+</Info>
+
+## Worker lifecycle
+
+### Starting a worker
+
+The `newWorker()` function (worker.go:62-80) initializes and starts the background goroutine:
+
+```go
+w := &worker{
+    queue:    make(chan *buffer, cap),
+    syncChan: make(chan chan error),
+    output:   output,
+    bw:       bufio.NewWriterSize(output, 64*1024), // 64KB buffer
+    stopChan: make(chan struct{}),
+    flushed:  make(chan struct{}),
+    strategy: strategy,
+}
+w.refCount.Store(1)
+w.start()
+```
+
+All workers are registered in a global `_workers` slice (worker.go:33-34) to support `flushAllWorkers()` for graceful shutdown.
+
+### Worker run loop
+
+The `run()` method (worker.go:139-168) implements the core processing logic:
+
+```go
+for {
+    select {
+    case <-w.stopChan:
+        w.drainAll()
+        w.flushBuffer()
+        return
+    case errChan := <-w.syncChan:
+        w.drainAll()
+        err := w.flushBuffer()
+        errChan <- err
+    case b := <-w.queue:
+        w.write(b)
+        // Batching: drain more without blocking
+        for {
+            select {
+            case next := <-w.queue:
+                w.write(next)
+            default:
+                goto flush
+            }
+        }
+    flush:
+        w.flushBuffer()
+    }
+}
+```
+
+### Batching optimization
+
+The worker (worker.go:156-163) attempts to drain multiple entries from the queue without blocking, then flushes them together. This reduces the number of syscalls and improves throughput.
+
+## Buffer management
+
+Velo uses a buffer pool to avoid allocating memory for every log entry. The `submit()` method (worker.go:100-118) handles buffer submission:
+
+```go
+func (w *worker) submit(b *buffer) {
+    select {
+    case w.queue <- b:
+        return
+    default:
+        // Queue is full - apply overflow strategy
+    }
+    // ... overflow handling
+}
+```
+
+When the channel has space, the buffer is queued immediately and your goroutine returns. When the channel is full, the [overflow strategy](/concepts/overflow-strategies) determines what happens next.
+
+## Synchronization
+
+The `sync()` method (worker.go:121-129) blocks until all queued logs are written to the underlying writer:
+
+```go
+func (w *worker) sync() error {
+    errChan := make(chan error, 1)
+    select {
+    case w.syncChan <- errChan:
+        return <-errChan
+    case <-w.flushed:
+        return nil
+    }
+}
+```
+
+Call `logger.Close()` or `logger.Sync()` before your application exits to ensure all logs are written:
+
+```go
+logger := velo.New()
+defer logger.Close() // Ensures all logs are flushed
+```
+
+<Warning>
+If you don't call `Close()` or `Sync()`, logs remaining in the buffer may be lost when your application terminates.
+</Warning>
+
+## Error handling
+
+The worker tracks write errors via `lastErr` (worker.go:59) and the `handleError()` method (worker.go:196-202):
+
+```go
+func (w *worker) handleError(err error) {
+    if err != nil && w.lastErr != err {
+        // Prevent log spam about logging errors
+        w.lastErr = err
+        fmt.Fprintf(os.Stderr, "velo: logging error: %v\n", err)
+    }
+}
+```
+
+Errors are printed to `stderr` to avoid recursive logging issues. The worker deduplicates identical consecutive errors to prevent spam.
+
+## Stopping a worker
+
+The `stop()` method (worker.go:86-98) gracefully shuts down the background goroutine:
+
+1. Removes the worker from the global registry
+2. Closes the `stopChan` to signal shutdown
+3. Waits for the `flushed` channel to confirm all entries are written
+
+The worker drains all remaining entries (worker.go:145-146) before returning, ensuring no logs are lost during shutdown.
+
+## Performance characteristics
+
+- **Zero blocking**: Your goroutines never wait for I/O under normal conditions
+- **Batched writes**: Multiple log entries are written in a single syscall
+- **64KB buffer**: Reduces the frequency of writes to the underlying stream
+- **Buffer pooling**: Eliminates allocations for log entry buffers
+
+See the [performance guide](/guides/performance) for detailed performance comparisons with other logging libraries.

@@ -1,0 +1,237 @@
+---
+title: Context logging
+description: Store and retrieve loggers from context.Context for request-scoped logging
+---
+
+Velo provides utilities to store loggers in `context.Context`, enabling request-scoped logging without modifying function signatures throughout your codebase.
+
+## Why context logging?
+
+In real-world applications, you often want to attach request-specific fields (like request ID, user ID, or trace ID) to all logs within a request's lifecycle:
+
+```go
+// Without context: pass logger through every function
+func HandleRequest(logger *velo.Logger, req *http.Request) {
+  ProcessAuth(logger, req)
+  ProcessData(logger, req)
+}
+
+func ProcessAuth(logger *velo.Logger, req *http.Request) {
+  logger.Info("authenticating user")
+}
+
+// With context: logger flows implicitly
+func HandleRequest(ctx context.Context, req *http.Request) {
+  ProcessAuth(ctx, req)
+  ProcessData(ctx, req)
+}
+
+func ProcessAuth(ctx context.Context, req *http.Request) {
+  logger := velo.FromContext(ctx)
+  logger.Info("authenticating user") // Includes request-scoped fields
+}
+```
+
+## Storing loggers in context
+
+Use `WithContext` to inject a logger into a context:
+
+```go
+func middleware(next http.Handler) http.Handler {
+  return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    // Create a logger with request-scoped fields
+    logger := velo.Default().With(
+      "request_id", r.Header.Get("X-Request-ID"),
+      "method", r.Method,
+      "path", r.URL.Path,
+    )
+    
+    // Store it in context
+    ctx := velo.WithContext(r.Context(), logger)
+    
+    // Pass context to downstream handlers
+    next.ServeHTTP(w, r.WithContext(ctx))
+  })
+}
+```
+
+Now all downstream code can retrieve the logger:
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+  logger := velo.FromContext(r.Context())
+  logger.Info("processing request") // Automatically includes request_id, method, path
+}
+```
+
+## Retrieving loggers from context
+
+The `FromContext` function extracts the logger from a context:
+
+```go
+logger := velo.FromContext(ctx)
+logger.Info("operation completed")
+```
+
+<Note>
+If the context doesn't contain a logger, `FromContext` returns the global default logger. This ensures your code always has a valid logger instance.
+</Note>
+
+## Context-aware logging methods
+
+Velo provides `LogContext` and `LogContextFields` methods that accept a context and automatically extract fields using a `ContextExtractor`:
+
+```go
+// Configure a context extractor
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ContextExtractor: func(ctx context.Context) []velo.Field {
+    fields := []velo.Field{}
+    
+    if requestID, ok := ctx.Value("request_id").(string); ok {
+      fields = append(fields, velo.String("request_id", requestID))
+    }
+    
+    if userID, ok := ctx.Value("user_id").(int); ok {
+      fields = append(fields, velo.Int("user_id", userID))
+    }
+    
+    return fields
+  },
+})
+
+// Use context-aware logging
+logger.LogContext(ctx, velo.InfoLevel, "user action",
+  "action", "update_profile",
+)
+// Automatically includes request_id and user_id from context
+```
+
+<Tip>
+Using a `ContextExtractor` is more efficient than manually calling `FromContext` because the extractor runs once per log call and caches the extracted fields.
+</Tip>
+
+## Typed fields with context
+
+For zero-allocation logging with context extraction:
+
+```go
+logger.LogContextFields(ctx, velo.InfoLevel, "database query",
+  velo.String("table", "users"),
+  velo.Duration("elapsed", elapsed),
+)
+// Context fields are automatically added as typed fields
+```
+
+## Example: HTTP middleware
+
+Here's a complete example of request-scoped logging middleware:
+
+<Steps>
+  <Step title="Create middleware">
+    ```go
+    func LoggingMiddleware(logger *velo.Logger) func(http.Handler) http.Handler {
+      return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          // Create request-scoped logger
+          requestLogger := logger.WithFields(
+            velo.String("request_id", generateRequestID()),
+            velo.String("method", r.Method),
+            velo.String("path", r.URL.Path),
+            velo.String("remote_addr", r.RemoteAddr),
+          )
+          
+          // Store in context
+          ctx := velo.WithContext(r.Context(), requestLogger)
+          
+          // Log request start
+          requestLogger.Info("request started")
+          
+          // Process request
+          next.ServeHTTP(w, r.WithContext(ctx))
+          
+          // Log request completion
+          requestLogger.Info("request completed")
+        })
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Use in handlers">
+    ```go
+    func userHandler(w http.ResponseWriter, r *http.Request) {
+      logger := velo.FromContext(r.Context())
+      
+      userID := r.URL.Query().Get("id")
+      logger.Info("fetching user", "user_id", userID)
+      
+      // All logs include request_id, method, path, remote_addr
+      user, err := fetchUser(r.Context(), userID)
+      if err != nil {
+        logger.Error("failed to fetch user", "error", err)
+        http.Error(w, "Internal Server Error", 500)
+        return
+      }
+      
+      logger.Info("user fetched successfully")
+      json.NewEncoder(w).Encode(user)
+    }
+    ```
+  </Step>
+  
+  <Step title="Register middleware">
+    ```go
+    func main() {
+      logger := velo.NewWithOptions(os.Stderr, velo.Options{
+        ReportTimestamp: true,
+        Formatter: velo.JSONFormatter,
+      })
+      defer logger.Close()
+      
+      mux := http.NewServeMux()
+      mux.HandleFunc("/users", userHandler)
+      
+      handler := LoggingMiddleware(logger)(mux)
+      http.ListenAndServe(":8080", handler)
+    }
+    ```
+  </Step>
+</Steps>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Inject loggers early in the request lifecycle">
+    Set up your logger with all request-scoped fields in middleware or at the entry point of your request handler. This ensures all downstream code has access to the enriched logger.
+  </Accordion>
+  
+  <Accordion title="Use typed fields for request-scoped data">
+    When creating request-scoped loggers with `WithFields()`, use typed fields for better performance:
+    
+    ```go
+    requestLogger := logger.WithFields(
+      velo.String("request_id", requestID),
+      velo.String("user_id", userID),
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="Avoid storing sensitive data in context">
+    Be cautious about what fields you extract from context. Avoid logging passwords, tokens, or other sensitive information.
+  </Accordion>
+  
+  <Accordion title="Use ContextExtractor for common patterns">
+    If you consistently extract the same fields from context across your application, configure a `ContextExtractor` on your logger rather than manually extracting fields in each handler.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Basic usage" icon="book" href="/guides/basic-usage">
+    Learn the fundamentals of logging with Velo
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure advanced logger options
+  </Card>
+</CardGroup>

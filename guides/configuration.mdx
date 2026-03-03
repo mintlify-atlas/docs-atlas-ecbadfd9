@@ -1,0 +1,421 @@
+---
+title: Configuration
+description: Configure Velo loggers with options for formatting, async mode, timestamps, and more
+---
+
+Velo provides extensive configuration through the `Options` struct, allowing you to customize everything from output format to async behavior.
+
+## Basic configuration
+
+Use `NewWithOptions` to create a logger with custom settings:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Level: velo.InfoLevel,
+  ReportTimestamp: true,
+  Formatter: velo.JSONFormatter,
+})
+defer logger.Close()
+```
+
+For simple cases, use `New` which applies default options:
+
+```go
+logger := velo.New(os.Stderr) // Equivalent to NewWithOptions with empty Options
+```
+
+## Output formatters
+
+Velo supports two built-in formatters:
+
+<Tabs>
+  <Tab title="Text formatter (default)">
+    Colorized, human-readable output for development:
+    
+    ```go
+    logger := velo.NewWithOptions(os.Stderr, velo.Options{
+      Formatter: velo.TextFormatter, // Default
+      ReportTimestamp: true,
+    })
+    
+    logger.Info("server started", "port", 8080)
+    // Output: 2026/03/03 10:15:30 INFO server started port=8080
+    ```
+  </Tab>
+  
+  <Tab title="JSON formatter">
+    Structured JSON output for production and log aggregators:
+    
+    ```go
+    logger := velo.NewWithOptions(os.Stderr, velo.Options{
+      Formatter: velo.JSONFormatter,
+      ReportTimestamp: true,
+    })
+    
+    logger.Info("server started", "port", 8080)
+    // Output: {"level":"INFO","time":"2026/03/03 10:15:30","message":"server started","port":8080}
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Use `TextFormatter` during development for readability, and `JSONFormatter` in production for structured log aggregation.
+</Tip>
+
+## Async mode and buffering
+
+Velo can run in synchronous or asynchronous mode:
+
+### Synchronous mode (default)
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Async: false, // Default
+})
+// Logs are written directly to the output
+```
+
+### Asynchronous mode
+
+Moves I/O to a background worker for better performance:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Async: true,
+  BufferSize: 8192, // Must be power of 2, defaults to 8192
+})
+defer logger.Close() // Critical: flush the buffer
+
+logger.Info("non-blocking log")
+```
+
+<Note>
+Async mode parallelizes formatting and I/O, keeping your hot paths fast. Always call `Close()` to flush buffered logs before exit.
+</Note>
+
+## Overflow strategies
+
+Control what happens when the async buffer fills up:
+
+<Tabs>
+  <Tab title="OverflowSync (default)">
+    Temporarily switch to synchronous writes:
+    
+    ```go
+    logger := velo.NewWithOptions(os.Stderr, velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowSync, // Default
+    })
+    // When buffer is full, calling goroutine writes directly
+    // Prevents log loss but temporarily blocks
+    ```
+  </Tab>
+  
+  <Tab title="OverflowDrop">
+    Discard logs when buffer is full:
+    
+    ```go
+    logger := velo.NewWithOptions(os.Stderr, velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowDrop,
+    })
+    // Maintains low latency at the cost of log loss
+    ```
+  </Tab>
+  
+  <Tab title="OverflowBlock">
+    Block until space becomes available:
+    
+    ```go
+    logger := velo.NewWithOptions(os.Stderr, velo.Options{
+      Async: true,
+      OverflowStrategy: velo.OverflowBlock,
+    })
+    // Guarantees no log loss but can severely impact latency
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+`OverflowBlock` should be used with caution as it can cause unpredictable application latency under high load.
+</Warning>
+
+## Log levels
+
+Set the minimum level to filter logs:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Level: velo.WarnLevel, // Only Warn, Error, Panic, Fatal
+})
+
+logger.Debug("not logged") // Below WarnLevel
+logger.Warn("this appears") // WarnLevel and above
+```
+
+Change levels dynamically:
+
+```go
+logger.SetLevel(velo.DebugLevel) // Show all logs
+logger.SetLevel(velo.ErrorLevel) // Only errors and above
+```
+
+## Timestamp configuration
+
+### Enable/disable timestamps
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportTimestamp: true, // Include timestamps
+})
+
+logger.SetReportTimestamp(false) // Disable at runtime
+```
+
+### Custom time format
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportTimestamp: true,
+  TimeFormat: time.RFC3339, // Use RFC3339 instead of default
+})
+
+logger.Info("custom time format")
+// Output: 2026-03-03T10:15:30Z INFO custom time format
+```
+
+The default format is `2006/01/02 15:04:05`.
+
+### Custom time function
+
+For testing or timezone adjustments:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportTimestamp: true,
+  TimeFunction: func(t time.Time) time.Time {
+    return t.UTC() // Force UTC
+  },
+})
+```
+
+## Caller location
+
+Include file and line number in logs:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportCaller: true,
+  CallerFormatter: velo.ShortCallerFormatter, // Default
+})
+
+logger.Info("with caller")
+// Output: INFO main.go:42 with caller
+```
+
+<Warning>
+Enabling caller reporting incurs a significant performance penalty (requires `runtime.Caller`). Use sparingly in production.
+</Warning>
+
+### Caller formatters
+
+<Tabs>
+  <Tab title="Short (default)">
+    ```go
+    velo.Options{
+      ReportCaller: true,
+      CallerFormatter: velo.ShortCallerFormatter,
+    }
+    // Output: main.go:42
+    ```
+  </Tab>
+  
+  <Tab title="Long">
+    ```go
+    velo.Options{
+      ReportCaller: true,
+      CallerFormatter: velo.LongCallerFormatter,
+    }
+    // Output: /full/path/to/main.go:42
+    ```
+  </Tab>
+  
+  <Tab title="Custom">
+    ```go
+    velo.Options{
+      ReportCaller: true,
+      CallerFormatter: func(file string, line int, funcName string) string {
+        return fmt.Sprintf("%s:%d@%s", file, line, funcName)
+      },
+    }
+    // Output: main.go:42@main.handler
+    ```
+  </Tab>
+</Tabs>
+
+### Caller offset
+
+Adjust stack frame depth for wrapper functions:
+
+```go
+func MyLogWrapper(logger *velo.Logger, msg string) {
+  logger.Info(msg) // This would report MyLogWrapper as caller
+}
+
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportCaller: true,
+  CallerOffset: 1, // Skip MyLogWrapper, report actual caller
+})
+```
+
+## Stack traces
+
+Automatically capture stack traces for errors:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ReportStacktrace: true,
+})
+
+logger.Error("error occurred", "error", err)
+// Includes full stack trace in output
+```
+
+<Note>
+Stack traces are captured for:
+- All logs at `ErrorLevel` or higher
+- Any log containing an error field (when `ReportStacktrace: true`)
+</Note>
+
+<Warning>
+Stack trace capture incurs significant performance overhead. Enable only when debugging or in low-error-rate environments.
+</Warning>
+
+## Persistent fields and prefixes
+
+### Default fields
+
+Attach fields to every log entry:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Fields: []any{
+    "service", "api",
+    "version", "1.0.0",
+    "environment", "production",
+  },
+})
+
+logger.Info("request handled")
+// Includes service, version, environment in every log
+```
+
+### Prefix
+
+Prepend a static string to all messages:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  Prefix: "[API] ",
+})
+
+logger.Info("server started")
+// Output: INFO [API] server started
+
+logger.SetPrefix("[WORKER] ") // Change at runtime
+```
+
+## Context extraction
+
+Automatically extract fields from `context.Context`:
+
+```go
+logger := velo.NewWithOptions(os.Stderr, velo.Options{
+  ContextExtractor: func(ctx context.Context) []velo.Field {
+    var fields []velo.Field
+    
+    if requestID, ok := ctx.Value("request_id").(string); ok {
+      fields = append(fields, velo.String("request_id", requestID))
+    }
+    
+    if userID, ok := ctx.Value("user_id").(string); ok {
+      fields = append(fields, velo.String("user_id", userID))
+    }
+    
+    return fields
+  },
+})
+
+// Use with LogContext
+logger.LogContext(ctx, velo.InfoLevel, "operation completed")
+// Automatically includes request_id and user_id from context
+```
+
+## Runtime configuration changes
+
+Most settings can be changed after logger creation:
+
+```go
+logger := velo.New(os.Stderr)
+
+// Change settings at runtime
+logger.SetLevel(velo.DebugLevel)
+logger.SetFormatter(velo.JSONFormatter)
+logger.SetReportTimestamp(true)
+logger.SetTimeFormat(time.RFC3339)
+logger.SetReportCaller(true)
+logger.SetReportStacktrace(false)
+logger.SetPrefix("[APP] ")
+```
+
+<Note>
+Configuration changes are thread-safe and use atomic operations for zero-downtime updates.
+</Note>
+
+## Complete example
+
+Here's a production-ready configuration:
+
+```go
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+  // Logging level
+  Level: velo.InfoLevel,
+  
+  // Output format
+  Formatter: velo.JSONFormatter,
+  
+  // Async mode
+  Async: true,
+  BufferSize: 8192,
+  OverflowStrategy: velo.OverflowSync,
+  
+  // Timestamps
+  ReportTimestamp: true,
+  TimeFormat: time.RFC3339,
+  
+  // Metadata (disabled for performance)
+  ReportCaller: false,
+  ReportStacktrace: false,
+  
+  // Persistent context
+  Fields: []any{
+    "service", "api-server",
+    "version", "2.1.0",
+    "environment", "production",
+  },
+})
+defer logger.Close()
+
+logger.Info("application started", "port", 8080)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Performance" icon="gauge-high" href="/guides/performance">
+    Learn optimization techniques and benchmarks
+  </Card>
+  <Card title="Context logging" icon="layer-group" href="/guides/context-logging">
+    Use context extractors in practice
+  </Card>
+</CardGroup>

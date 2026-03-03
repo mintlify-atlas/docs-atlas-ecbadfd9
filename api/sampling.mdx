@@ -1,0 +1,403 @@
+---
+title: Sampling
+description: Control log volume by sampling high-frequency log entries
+---
+
+## Overview
+
+Sampling allows you to cap the CPU and I/O load of logging while preserving a representative subset of your logs. This is critical for high-throughput applications where logging every event would overwhelm the system.
+
+Velo's sampler works by allowing the first N entries with a specific level and message through during each time interval (tick). After that threshold, it logs every Mth message and drops the rest.
+
+## Functions
+
+### NewSamplerWithOptions
+
+Creates a logger that samples incoming log entries with configurable options.
+
+```go
+func NewSamplerWithOptions(
+    logger *Logger,
+    tick time.Duration,
+    first int,
+    thereafter int,
+    opts ...SamplerOption,
+) *Logger
+```
+
+<ParamField path="logger" type="*Logger" required>
+  The base logger to wrap with sampling behavior.
+</ParamField>
+
+<ParamField path="tick" type="time.Duration" required>
+  The time interval for sampling windows. After each tick, counters reset.
+</ParamField>
+
+<ParamField path="first" type="int" required>
+  The number of identical messages to log as-is during each tick.
+</ParamField>
+
+<ParamField path="thereafter" type="int" required>
+  After `first` messages, log every Nth message. If 0, drop all subsequent messages.
+</ParamField>
+
+<ParamField path="opts" type="...SamplerOption">
+  Optional configuration like `SamplerHook()` to monitor sampling decisions.
+</ParamField>
+
+**Returns:** A new logger with sampling enabled.
+
+### NewSampler
+
+Creates a logger that samples incoming log entries (deprecated).
+
+```go
+func NewSampler(
+    logger *Logger,
+    tick time.Duration,
+    first int,
+    thereafter int,
+) *Logger
+```
+
+<Warning>
+**Deprecated:** Use `NewSamplerWithOptions` instead for access to sampling hooks and future options.
+</Warning>
+
+## SamplerOption
+
+Configuration options for sampler behavior.
+
+### SamplerHook
+
+Registers a callback function that fires whenever the sampler makes a decision.
+
+```go
+func SamplerHook(
+    hook func(lvl Level, msg string, dec SamplingDecision),
+) SamplerOption
+```
+
+<ParamField path="hook" type="func(Level, string, SamplingDecision)" required>
+  Callback function invoked for each sampling decision. Receives the log level, message, and decision type.
+</ParamField>
+
+**Use cases:**
+- Track metrics comparing dropped vs. sampled logs
+- Monitor sampler performance
+- Alert when too many logs are being dropped
+
+## SamplingDecision
+
+Represents a decision made by the sampler as a bit field.
+
+```go
+type SamplingDecision uint32
+```
+
+### Constants
+
+<ParamField path="LogDropped" type="SamplingDecision">
+  Indicates that the sampler discarded a log entry.
+</ParamField>
+
+<ParamField path="LogSampled" type="SamplingDecision">
+  Indicates that the sampler allowed a log entry through.
+</ParamField>
+
+## Usage examples
+
+### Basic sampling
+
+Limit high-frequency logs to prevent overwhelming the system:
+
+```go
+import (
+    "os"
+    "time"
+    "github.com/blairtcg/velo"
+)
+
+func main() {
+    baseLogger := velo.New(os.Stdout)
+    
+    // Sample: log first 10 identical messages per second,
+    // then every 5th message thereafter
+    logger := velo.NewSamplerWithOptions(
+        baseLogger,
+        time.Second,  // tick: 1 second windows
+        10,           // first: allow first 10 through
+        5,            // thereafter: then every 5th message
+    )
+    
+    // In a tight loop, this would normally log 1000 times
+    for i := 0; i < 1000; i++ {
+        logger.Info("processing item", "count", i)
+    }
+    // Result: Only ~208 logs (10 + 990/5)
+}
+```
+
+### Aggressive sampling
+
+Drop all logs after the first N:
+
+```go
+// Only log first 5 identical messages per minute, drop the rest
+logger := velo.NewSamplerWithOptions(
+    baseLogger,
+    time.Minute,  // 1 minute windows
+    5,            // first 5 messages
+    0,            // thereafter: 0 = drop all
+)
+
+for i := 0; i < 1000; i++ {
+    logger.Debug("trace event", "iteration", i)
+}
+// Result: Only 5 logs per minute
+```
+
+### Monitoring sampling decisions
+
+Track how many logs are being dropped:
+
+```go
+import "sync/atomic"
+
+var (
+    sampledCount atomic.Int64
+    droppedCount atomic.Int64
+)
+
+logger := velo.NewSamplerWithOptions(
+    baseLogger,
+    time.Second,
+    10,
+    5,
+    velo.SamplerHook(func(
+        lvl velo.Level,
+        msg string,
+        dec velo.SamplingDecision,
+    ) {
+        if dec&velo.LogDropped > 0 {
+            droppedCount.Add(1)
+        }
+        if dec&velo.LogSampled > 0 {
+            sampledCount.Add(1)
+        }
+    }),
+)
+
+// Later, check the metrics
+fmt.Printf("Sampled: %d, Dropped: %d\n",
+    sampledCount.Load(),
+    droppedCount.Load(),
+)
+```
+
+### Per-endpoint sampling
+
+Different sampling rates for different endpoints:
+
+```go
+// High-traffic endpoint - aggressive sampling
+healthLogger := velo.NewSamplerWithOptions(
+    baseLogger.With("endpoint", "/health"),
+    time.Minute,
+    1,   // Only first message
+    0,   // Drop the rest
+)
+
+// Critical endpoint - light sampling
+authLogger := velo.NewSamplerWithOptions(
+    baseLogger.With("endpoint", "/auth"),
+    time.Second,
+    100,  // First 100 messages
+    10,   // Then every 10th
+)
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    healthLogger.Debug("health check")
+    w.WriteHeader(http.StatusOK)
+}
+
+func authHandler(w http.ResponseWriter, r *http.Request) {
+    authLogger.Info("auth attempt", "user", r.FormValue("username"))
+    // ...
+}
+```
+
+### Level-specific sampling
+
+Sample only specific log levels:
+
+```go
+// Base logger logs everything at Info and above
+baseLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Level: velo.InfoLevel,
+})
+
+// Create a debug logger with sampling
+debugLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Level: velo.DebugLevel,
+})
+debugLogger = velo.NewSamplerWithOptions(
+    debugLogger,
+    time.Second,
+    50,
+    10,
+)
+
+// Use different loggers based on importance
+debugLogger.Debug("verbose trace")  // Sampled
+baseLogger.Info("important event")  // Not sampled
+baseLogger.Error("critical error")  // Not sampled
+```
+
+## Sampling behavior
+
+### How sampling works
+
+1. Each unique combination of **level + message** gets its own counter
+2. Counters reset every **tick** interval
+3. The first **N** identical messages pass through unchanged
+4. After that, every **Mth** message passes through (if M > 0)
+5. All other messages are dropped
+
+**Example with `tick=1s, first=3, thereafter=2`:**
+
+```
+Time  | Message         | Counter | Action
+------|-----------------|---------|--------
+0.0s  | "processing"    | 1       | Log (first)
+0.1s  | "processing"    | 2       | Log (first)
+0.2s  | "processing"    | 3       | Log (first)
+0.3s  | "processing"    | 4       | Drop (4 % 2 != 0)
+0.4s  | "processing"    | 5       | Log (5 % 2 == 0, every 2nd)
+0.5s  | "processing"    | 6       | Drop
+0.6s  | "processing"    | 7       | Log (every 2nd)
+1.0s  | "processing"    | 1       | Log (counter reset)
+```
+
+### Counter hashing
+
+The sampler uses FNV-32a hashing to map messages to counters:
+
+- 4,096 counters per log level
+- Hash collisions are possible but rare
+- Collisions may cause slightly different sampling rates
+- No dynamic memory allocation
+
+### Thread safety
+
+The sampler is fully thread-safe:
+
+- Uses atomic operations for counters
+- Lock-free implementation
+- Safe for concurrent use across goroutines
+- Compare-and-swap for counter resets prevents race conditions
+
+## Performance notes
+
+### Speed over precision
+
+The sampler prioritizes performance over absolute precision:
+
+- Under heavy load, each tick may slightly over-sample or under-sample
+- Hash collisions can affect sampling accuracy
+- Concurrent resets may cause minor count discrepancies
+
+**This is intentional:** For high-throughput systems, approximate sampling is preferable to lock-based exact sampling.
+
+### Benchmark results
+
+```go
+BenchmarkNoSampling-8         5000000    312 ns/op     0 B/op    0 allocs/op
+BenchmarkWithSampling-8       4800000    324 ns/op     0 B/op    0 allocs/op
+```
+
+Sampling adds ~12ns overhead per log call (whether dropped or not).
+
+### Memory usage
+
+Each sampler allocates:
+- 6 levels × 4,096 counters × 16 bytes = ~384 KB
+- No per-message allocation
+- No garbage collection pressure
+
+## Common patterns
+
+### Sampling in production
+
+Use environment-based configuration:
+
+```go
+var logger *velo.Logger
+
+if os.Getenv("ENV") == "production" {
+    // Production: aggressive sampling
+    logger = velo.NewSamplerWithOptions(
+        baseLogger,
+        time.Second,
+        10,
+        5,
+    )
+} else {
+    // Development: no sampling
+    logger = baseLogger
+}
+```
+
+### Rate limiting errors
+
+Prevent error spam without losing critical information:
+
+```go
+// Base logger for normal logs
+baseLogger := velo.New(os.Stdout)
+
+// Sampled logger for expected errors
+expectedErrors := velo.NewSamplerWithOptions(
+    baseLogger,
+    time.Minute,
+    5,   // First 5 per minute
+    1,   // Then every error
+)
+
+func validateInput(input string) error {
+    if input == "" {
+        expectedErrors.Warn("empty input received")
+        return errors.New("invalid input")
+    }
+    // ...
+}
+```
+
+### Combining with async logging
+
+For maximum performance, combine sampling with async mode:
+
+```go
+baseLogger := velo.NewWithOptions(os.Stdout, &velo.Options{
+    Async:      true,
+    BufferSize: 8192,
+})
+
+sampledLogger := velo.NewSamplerWithOptions(
+    baseLogger,
+    time.Second,
+    100,
+    10,
+)
+
+// Ultra-high throughput with controlled output
+for i := 0; i < 1000000; i++ {
+    sampledLogger.Debug("event", "id", i)
+}
+```
+
+## Related
+
+- [Logger](/api/logger) - Create and configure loggers
+- [Levels](/api/levels) - Control which logs are emitted
+- [Async logging](/concepts/async-logging) - Improve performance with background workers

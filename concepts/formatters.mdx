@@ -1,0 +1,270 @@
+---
+title: Formatters
+description: Choose between human-readable text output and structured JSON logs
+---
+
+Velo supports two output formats for log entries: human-readable colorized text for development and structured JSON for production systems.
+
+## Formatter types
+
+The `Formatter` type (options.go:32-39) defines how log entries are serialized:
+
+```go
+type Formatter int
+
+const (
+    // TextFormatter serializes log entries as human readable, colorized text.
+    TextFormatter Formatter = iota
+    // JSONFormatter serializes log entries as structured JSON.
+    JSONFormatter
+)
+```
+
+### TextFormatter (default)
+
+TextFormatter (options.go:35-36) produces colorized, key-value formatted output optimized for human readability:
+
+```text
+2026/03/03 10:15:32 INFO failed to fetch URL url=https://api.example.com attempt=3 backoff=1s
+```
+
+**Features**:
+- Colorized output using ANSI escape codes
+- Automatic timestamp formatting with configurable layout
+- Key-value pairs with smart quoting (values with spaces are quoted)
+- Optimized for terminal viewing and local development
+
+**Implementation**: The `formatLogText()` function (formatter.go:40-237) writes directly to a pooled buffer without allocations for common types.
+
+### JSONFormatter
+
+JSONFormatter (options.go:38) produces structured JSON with one log entry per line:
+
+```json
+{"time":"2026-03-03T10:15:32Z","level":"info","msg":"failed to fetch URL","url":"https://api.example.com","attempt":3,"backoff":1000000000}
+```
+
+**Features**:
+- One JSON object per line (newline-delimited JSON)
+- Zero-allocation encoding for common types
+- Compatible with log aggregation systems (Elasticsearch, CloudWatch, Datadog)
+- Machine-readable and easy to parse
+
+**Implementation**: The `formatLogJSON()` function (formatter.go:243-336) uses a custom zero-allocation JSON encoder (formatter.go:553-556) that bypasses Go's standard `json.Marshal`.
+
+## Configuring formatters
+
+Set the formatter via `Options.Formatter` (options.go:128-129):
+
+```go
+// Text output for development
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: velo.TextFormatter,
+})
+
+// JSON output for production
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: velo.JSONFormatter,
+})
+```
+
+<Info>
+If you don't specify a formatter, Velo defaults to **TextFormatter** (options.go:128).
+</Info>
+
+## Text formatting details
+
+### Field rendering
+
+The text formatter processes fields in this order (formatter.go:111-234):
+
+1. Logger-attached fields (set via `With()`)
+2. Call-site loosely typed fields
+3. Logger-attached typed fields
+4. Context-extracted fields
+5. Call-site typed fields
+
+### Colorization
+
+Velo uses the `lipgloss` library for terminal styling. The `DefaultStyles()` function defines colors for:
+
+- Timestamps (formatter.go:47)
+- Log levels (different colors per level)
+- Keys and values
+- Separators (`=`)
+- Caller information
+
+Styles are cached in `_defaultStyles` (formatter.go:34) to avoid repeated allocations.
+
+### Value quoting
+
+The text formatter (formatter.go:103-107, 224-228) automatically quotes values containing spaces or equals signs:
+
+```text
+msg="fetch failed" url=https://example.com reason="connection timeout"
+```
+
+## JSON formatting details
+
+### Time encoding
+
+JSON timestamps support three formats via `Options.TimeFormat` (options.go:99):
+
+```go
+// RFC3339 with nanoseconds (default)
+{"time":"2026-03-03T10:15:32.123456789Z"}
+
+// Unix seconds
+TimeFormat: "unix"
+{"time":1709465732}
+
+// Unix milliseconds
+TimeFormat: "unix_milli"
+{"time":1709465732123}
+```
+
+The formatter (formatter.go:248-257) uses optimized paths for each time format.
+
+### Zero-allocation encoding
+
+The JSON formatter implements custom encoding for common types to eliminate allocations:
+
+```go
+case string:
+    appendJSONString(b, val)
+case int:
+    b.B = strconv.AppendInt(b.B, int64(val), 10)
+case bool:
+    b.B = strconv.AppendBool(b.B, val)
+```
+
+The `appendJSONString()` function (formatter.go:772-784) uses a fast path that only escapes when necessary.
+
+### Field types
+
+The JSON encoder (formatter.go:658-736) handles strongly typed fields efficiently:
+
+- **Primitives**: Strings, ints, bools serialize directly
+- **Time**: Encoded according to `TimeFormat`
+- **Duration**: Serialized as nanoseconds (int64)
+- **Objects**: Implement `ObjectMarshaler` interface
+- **Arrays**: Implement `ArrayMarshaler` interface
+- **Slices**: Special handling for `[]int`, `[]string`, `[]time.Time`
+
+### Escape handling
+
+The JSON encoder maintains a `_noEscape` lookup table (formatter.go:738-746) for fast character validation:
+
+```go
+var _noEscape [256]bool
+
+func init() {
+    for i := 0; i <= 0x1f; i++ {
+        _noEscape[i] = true
+    }
+    _noEscape['"'] = true
+    _noEscape['\\'] = true
+}
+```
+
+The `appendJSONStringEscape()` function (formatter.go:786-818) uses chunked memory copies for maximum performance.
+
+## Performance characteristics
+
+### Text formatter
+
+- **Allocation**: Typically 1 allocation for loosely typed fields, 0 for strongly typed
+- **Speed**: ~48 ns/op for simple messages (README.md:98)
+- **Throughput**: Optimized for terminal output with color rendering
+
+### JSON formatter
+
+- **Allocation**: 0 allocations for strongly typed fields with pre-encoded context
+- **Speed**: Comparable to text formatter for most workloads
+- **Throughput**: Bypasses reflection and `json.Marshal` overhead
+
+<Info>
+The JSON formatter's custom encoder (formatter.go:553-949) eliminates map allocations and reflection that Go's standard library requires. This is a key performance optimization.
+</Info>
+
+## Entry vs. direct formatting
+
+Velo uses two formatting paths:
+
+### Direct formatting (fast path)
+
+The `formatLogText()` and `formatLogJSON()` functions (formatter.go:40, 243) bypass the `Entry` struct allocation:
+
+```go
+formatLogText(b, l, cfg, level, msg, callFields, callTypedFields, ctxFields, t)
+```
+
+This is used for the most common logging operations and eliminates allocations.
+
+### Entry formatting (compatibility)
+
+The `formatEntry()` function (formatter.go:339-348) accepts an `Entry` struct for compatibility with interfaces that require materialized log entries:
+
+```go
+func formatEntry(b *buffer, e *Entry) {
+    switch e.Formatter {
+    case JSONFormatter:
+        formatJSON(b, e)
+    case TextFormatter:
+        fallthrough
+    default:
+        formatText(b, e)
+    }
+}
+```
+
+This path is used by the slog handler and other integrations.
+
+## Custom formatters
+
+Velo does not currently support custom formatters. The `Formatter` type is a simple enum with two values. To implement custom formatting:
+
+1. Use `TextFormatter` and post-process the output
+2. Wrap the logger's output writer with your own `io.Writer` that transforms the output
+3. Contribute a PR to add a custom formatter interface
+
+## Best practices
+
+### Development environments
+
+Use **TextFormatter** for local development:
+
+```go
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: velo.TextFormatter,
+    ReportTimestamp: true,
+})
+```
+
+The colorized output makes it easy to scan logs visually.
+
+### Production environments
+
+Use **JSONFormatter** for production deployments:
+
+```go
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: velo.JSONFormatter,
+    TimeFormat: "unix_milli",
+})
+```
+
+JSON is easier to parse and ingest into logging platforms.
+
+### Environment-based switching
+
+```go
+formatter := velo.TextFormatter
+if os.Getenv("ENV") == "production" {
+    formatter = velo.JSONFormatter
+}
+
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: formatter,
+})
+```

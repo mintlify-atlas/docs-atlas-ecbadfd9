@@ -1,0 +1,792 @@
+---
+title: Logger
+description: Fast, leveled, and structured logging for performance-critical applications
+---
+
+The `Logger` type provides fast, leveled, and structured logging designed for contexts where every microsecond and allocation matters. It supports both synchronous and asynchronous writing, zero allocation field logging, and dynamic context extraction.
+
+## Creating loggers
+
+### New
+
+Constructs a new Logger writing to the provided io.Writer.
+
+```go
+func New(w io.Writer) *Logger
+```
+
+<ParamField path="w" type="io.Writer">
+  The writer to output logs to. If nil, defaults to standard error.
+</ParamField>
+
+Applies the default Options. This provides a quick way to instantiate a Logger without configuring advanced features.
+
+**Example**
+
+```go
+logger := velo.New(os.Stdout)
+logger.Info("application started")
+```
+
+### NewWithOptions
+
+Constructs a new Logger using the specified Options.
+
+```go
+func NewWithOptions(w io.Writer, o Options) *Logger
+```
+
+<ParamField path="w" type="io.Writer">
+  The writer to output logs to. If nil, defaults to standard error.
+</ParamField>
+
+<ParamField path="o" type="Options">
+  Configuration options for the logger
+</ParamField>
+
+Provides full control over the Logger's behavior, including asynchronous writing, formatting, and field extraction. This is the recommended way to instantiate a Logger for production applications.
+
+**Example**
+
+```go
+logger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Level:           velo.InfoLevel,
+    ReportTimestamp: true,
+    Formatter:       velo.JSONFormatter,
+    Async:           true,
+})
+```
+
+### Default
+
+Returns the global default Logger instance.
+
+```go
+func Default() *Logger
+```
+
+Initializes a new Logger writing to standard error with timestamp reporting enabled if one does not already exist. Use this for simple applications or quick debugging where dependency injection is unnecessary.
+
+**Example**
+
+```go
+velo.Default().Info("using default logger")
+```
+
+### SetDefault
+
+Replaces the global default Logger with the provided instance.
+
+```go
+func SetDefault(logger *Logger)
+```
+
+<ParamField path="logger" type="*Logger">
+  The logger instance to set as the global default
+</ParamField>
+
+Safely swaps the underlying pointer and closes the previous Logger if one existed. Use this during application startup to configure the global logging behavior.
+
+**Example**
+
+```go
+customLogger := velo.NewWithOptions(os.Stdout, velo.Options{
+    Formatter: velo.JSONFormatter,
+})
+velo.SetDefault(customLogger)
+```
+
+## Logging methods
+
+### Log
+
+Writes a message with loosely typed key-value pairs at the specified level.
+
+```go
+func (l *Logger) Log(level Level, msg string, keyvals ...any)
+```
+
+<ParamField path="level" type="Level">
+  The log level
+</ParamField>
+
+<ParamField path="msg" type="string">
+  The log message
+</ParamField>
+
+<ParamField path="keyvals" type="...any">
+  Loosely typed key-value pairs
+</ParamField>
+
+**Performance Note:** This method iterates over the key-value pairs to check for errors and capture stack traces. For absolute maximum performance and zero allocations, use the strongly typed `LogFields` method instead.
+
+**Example**
+
+```go
+logger.Log(velo.InfoLevel, "user logged in", "user_id", 123, "ip", "192.168.1.1")
+```
+
+### LogFields
+
+Writes a message with strongly typed fields at the specified level.
+
+```go
+func (l *Logger) LogFields(level Level, msg string, fields ...Field)
+```
+
+<ParamField path="level" type="Level">
+  The log level
+</ParamField>
+
+<ParamField path="msg" type="string">
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Strongly typed fields
+</ParamField>
+
+Guarantees zero allocations on the hot path, making it ideal for extreme high throughput, latency critical applications.
+
+**Example**
+
+```go
+logger.LogFields(velo.InfoLevel, "user logged in",
+    velo.Int("user_id", 123),
+    velo.String("ip", "192.168.1.1"),
+)
+```
+
+### LogContext
+
+Writes a message with loosely typed key-value pairs at the specified level, extracting context-specific fields.
+
+```go
+func (l *Logger) LogContext(ctx context.Context, level Level, msg string, keyvals ...any)
+```
+
+<ParamField path="ctx" type="context.Context">
+  The context to extract fields from
+</ParamField>
+
+<ParamField path="level" type="Level">
+  The log level
+</ParamField>
+
+<ParamField path="msg" type="string">
+  The log message
+</ParamField>
+
+<ParamField path="keyvals" type="...any">
+  Loosely typed key-value pairs
+</ParamField>
+
+Extracts context-specific fields if a ContextExtractor is configured.
+
+**Example**
+
+```go
+ctx := context.WithValue(context.Background(), "request_id", "abc123")
+logger.LogContext(ctx, velo.InfoLevel, "processing request", "status", "started")
+```
+
+### LogContextFields
+
+Writes a message with strongly typed fields at the specified level, extracting context-specific fields.
+
+```go
+func (l *Logger) LogContextFields(ctx context.Context, level Level, msg string, fields ...Field)
+```
+
+<ParamField path="ctx" type="context.Context">
+  The context to extract fields from
+</ParamField>
+
+<ParamField path="level" type="Level">
+  The log level
+</ParamField>
+
+<ParamField path="msg" type="string">
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Strongly typed fields
+</ParamField>
+
+Guarantees zero allocations on the hot path.
+
+**Example**
+
+```go
+ctx := context.WithValue(context.Background(), "request_id", "abc123")
+logger.LogContextFields(ctx, velo.InfoLevel, "processing request",
+    velo.String("status", "started"),
+)
+```
+
+### Logf
+
+Formats and writes a message at the specified level.
+
+```go
+func (l *Logger) Logf(level Level, format string, args ...any)
+```
+
+<ParamField path="level" type="Level">
+  The log level
+</ParamField>
+
+<ParamField path="format" type="string">
+  The format string
+</ParamField>
+
+<ParamField path="args" type="...any">
+  Format arguments
+</ParamField>
+
+Uses `fmt.Sprintf` to construct the message. This incurs allocation and formatting overhead. Avoid using this in performance critical paths.
+
+**Example**
+
+```go
+logger.Logf(velo.InfoLevel, "user %d logged in from %s", 123, "192.168.1.1")
+```
+
+## Level-specific methods
+
+### Debug
+
+Writes a message at DebugLevel with loosely typed key-value pairs.
+
+```go
+func (l *Logger) Debug(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Debug("variable state", "x", 10, "y", 20)
+```
+
+### Info
+
+Writes a message at InfoLevel with loosely typed key-value pairs.
+
+```go
+func (l *Logger) Info(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Info("server started", "port", 8080)
+```
+
+### Warn
+
+Writes a message at WarnLevel with loosely typed key-value pairs.
+
+```go
+func (l *Logger) Warn(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Warn("high memory usage", "percent", 85)
+```
+
+### Error
+
+Writes a message at ErrorLevel with loosely typed key-value pairs.
+
+```go
+func (l *Logger) Error(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Error("failed to connect", "error", err, "retries", 3)
+```
+
+### Panic
+
+Writes a message at PanicLevel with loosely typed key-value pairs, then panics.
+
+```go
+func (l *Logger) Panic(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Panic("critical failure", "component", "database")
+```
+
+### Fatal
+
+Writes a message at FatalLevel with loosely typed key-value pairs, then calls os.Exit(1).
+
+```go
+func (l *Logger) Fatal(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Fatal("cannot recover", "error", err)
+```
+
+### Print
+
+Writes a message with no level and loosely typed key-value pairs.
+
+```go
+func (l *Logger) Print(msg string, keyvals ...any)
+```
+
+**Example**
+
+```go
+logger.Print("general output", "status", "ok")
+```
+
+## Formatted level methods
+
+### Debugf
+
+Formats and writes a message at DebugLevel.
+
+```go
+func (l *Logger) Debugf(format string, args ...any)
+```
+
+### Infof
+
+Formats and writes a message at InfoLevel.
+
+```go
+func (l *Logger) Infof(format string, args ...any)
+```
+
+### Warnf
+
+Formats and writes a message at WarnLevel.
+
+```go
+func (l *Logger) Warnf(format string, args ...any)
+```
+
+### Errorf
+
+Formats and writes a message at ErrorLevel.
+
+```go
+func (l *Logger) Errorf(format string, args ...any)
+```
+
+### Panicf
+
+Formats and writes a message at PanicLevel, then panics.
+
+```go
+func (l *Logger) Panicf(format string, args ...any)
+```
+
+### Fatalf
+
+Formats and writes a message at FatalLevel, then calls os.Exit(1).
+
+```go
+func (l *Logger) Fatalf(format string, args ...any)
+```
+
+### Printf
+
+Formats and writes a message with no level.
+
+```go
+func (l *Logger) Printf(format string, args ...any)
+```
+
+## Strongly typed field methods
+
+### DebugFields
+
+Writes a message at DebugLevel with strongly typed fields, guaranteeing zero allocations.
+
+```go
+func (l *Logger) DebugFields(msg string, fields ...Field)
+```
+
+**Example**
+
+```go
+logger.DebugFields("state", velo.Int("x", 10), velo.Int("y", 20))
+```
+
+### InfoFields
+
+Writes a message at InfoLevel with strongly typed fields, guaranteeing zero allocations.
+
+```go
+func (l *Logger) InfoFields(msg string, fields ...Field)
+```
+
+**Example**
+
+```go
+logger.InfoFields("request completed", velo.Int("duration_ms", 42))
+```
+
+### WarnFields
+
+Writes a message at WarnLevel with strongly typed fields, guaranteeing zero allocations.
+
+```go
+func (l *Logger) WarnFields(msg string, fields ...Field)
+```
+
+### ErrorFields
+
+Writes a message at ErrorLevel with strongly typed fields, guaranteeing zero allocations.
+
+```go
+func (l *Logger) ErrorFields(msg string, fields ...Field)
+```
+
+**Example**
+
+```go
+logger.ErrorFields("connection failed", velo.Err(err), velo.Int("retry", 3))
+```
+
+### PanicFields
+
+Writes a message at PanicLevel with strongly typed fields, guaranteeing zero allocations, then panics.
+
+```go
+func (l *Logger) PanicFields(msg string, fields ...Field)
+```
+
+### FatalFields
+
+Writes a message at FatalLevel with strongly typed fields, guaranteeing zero allocations, then calls os.Exit(1).
+
+```go
+func (l *Logger) FatalFields(msg string, fields ...Field)
+```
+
+## Creating child loggers
+
+### With
+
+Creates a child Logger that includes the provided loosely typed key-value pairs.
+
+```go
+func (l *Logger) With(keyvals ...any) *Logger
+```
+
+<ParamField path="keyvals" type="...any">
+  Loosely typed key-value pairs to attach to the child logger
+</ParamField>
+
+Copies the parent's configuration and appends the new fields. If the JSONFormatter is active, it encodes the fields early to avoid redundant serialization on every log call. Use this to attach contextual data to a Logger for a specific scope or request.
+
+**Example**
+
+```go
+requestLogger := logger.With("request_id", "abc123", "user_id", 456)
+requestLogger.Info("processing request")
+```
+
+### WithFields
+
+Creates a child Logger that includes the provided strongly typed fields.
+
+```go
+func (l *Logger) WithFields(fields ...Field) *Logger
+```
+
+<ParamField path="fields" type="...Field">
+  Strongly typed fields to attach to the child logger
+</ParamField>
+
+Provides the highest performance when attaching contextual data to a Logger.
+
+**Example**
+
+```go
+requestLogger := logger.WithFields(
+    velo.String("request_id", "abc123"),
+    velo.Int("user_id", 456),
+)
+requestLogger.Info("processing request")
+```
+
+### WithPrefix
+
+Creates a child Logger that prepends the specified prefix to all messages.
+
+```go
+func (l *Logger) WithPrefix(prefix string) *Logger
+```
+
+<ParamField path="prefix" type="string">
+  The prefix to prepend to all messages
+</ParamField>
+
+Use this to visually group logs from a specific component or subsystem.
+
+**Example**
+
+```go
+authLogger := logger.WithPrefix("[AUTH]")
+authLogger.Info("user authenticated")
+// Output: [AUTH] user authenticated
+```
+
+## Configuration methods
+
+### SetLevel
+
+Changes the minimum logging level for this Logger dynamically.
+
+```go
+func (l *Logger) SetLevel(level Level)
+```
+
+<ParamField path="level" type="Level">
+  The new minimum logging level
+</ParamField>
+
+Uses atomic operations to ensure thread safety. The Logger discards any messages below this level. Use this to adjust verbosity at runtime without restarting the application.
+
+**Example**
+
+```go
+logger.SetLevel(velo.DebugLevel)
+```
+
+### SetReportTimestamp
+
+Toggles the inclusion of timestamps in log entries.
+
+```go
+func (l *Logger) SetReportTimestamp(report bool)
+```
+
+<ParamField path="report" type="bool">
+  Whether to include timestamps
+</ParamField>
+
+Disabling timestamps can slightly improve performance and reduce log volume if your log aggregator already assigns timestamps.
+
+**Example**
+
+```go
+logger.SetReportTimestamp(true)
+```
+
+### SetReportCaller
+
+Toggles the inclusion of the caller's file and line number.
+
+```go
+func (l *Logger) SetReportCaller(report bool)
+```
+
+<ParamField path="report" type="bool">
+  Whether to include caller information
+</ParamField>
+
+**Performance Note:** Enabling this feature incurs a significant performance penalty because it requires unwinding the stack using runtime.Caller. Use with caution in high throughput, latency critical paths.
+
+**Example**
+
+```go
+logger.SetReportCaller(true)
+```
+
+### SetReportStacktrace
+
+Toggles the automatic capture of stack traces for errors.
+
+```go
+func (l *Logger) SetReportStacktrace(report bool)
+```
+
+<ParamField path="report" type="bool">
+  Whether to capture stack traces
+</ParamField>
+
+When enabled, the Logger captures a stack trace whenever it writes an entry at ErrorLevel or higher, or when an error field is present.
+
+**Performance Note:** Capturing stack traces incurs a significant performance penalty. Use this feature primarily for debugging or in environments where error rates are low.
+
+**Example**
+
+```go
+logger.SetReportStacktrace(true)
+```
+
+### SetPrefix
+
+Changes the prefix prepended to all messages for this Logger.
+
+```go
+func (l *Logger) SetPrefix(prefix string)
+```
+
+<ParamField path="prefix" type="string">
+  The new prefix
+</ParamField>
+
+Use this to dynamically label logs from a specific component.
+
+**Example**
+
+```go
+logger.SetPrefix("[API]")
+```
+
+### SetTimeFormat
+
+Changes the timestamp format string.
+
+```go
+func (l *Logger) SetTimeFormat(format string)
+```
+
+<ParamField path="format" type="string">
+  The new time format string
+</ParamField>
+
+The format string must conform to the layout expected by the standard time package.
+
+**Example**
+
+```go
+logger.SetTimeFormat("2006-01-02T15:04:05.000Z07:00")
+```
+
+### SetTimeFunction
+
+Changes the function used to generate timestamps.
+
+```go
+func (l *Logger) SetTimeFunction(f TimeFunction)
+```
+
+<ParamField path="f" type="TimeFunction">
+  The new time function
+</ParamField>
+
+Use this to inject a custom clock for testing or to apply specific timezone adjustments.
+
+**Example**
+
+```go
+logger.SetTimeFunction(func(t time.Time) time.Time {
+    return t.UTC()
+})
+```
+
+### SetFormatter
+
+Changes the Formatter used to serialize log entries.
+
+```go
+func (l *Logger) SetFormatter(f Formatter)
+```
+
+<ParamField path="f" type="Formatter">
+  The new formatter
+</ParamField>
+
+You can switch between built in formatters like JSONFormatter and TextFormatter, or provide a custom implementation.
+
+**Example**
+
+```go
+logger.SetFormatter(velo.JSONFormatter)
+```
+
+### SetCallerFormatter
+
+Changes the function used to format caller location data.
+
+```go
+func (l *Logger) SetCallerFormatter(f CallerFormatter)
+```
+
+<ParamField path="f" type="CallerFormatter">
+  The new caller formatter function
+</ParamField>
+
+Use this to customize how file paths and line numbers appear in your logs.
+
+**Example**
+
+```go
+logger.SetCallerFormatter(velo.LongCallerFormatter)
+```
+
+### SetCallerOffset
+
+Changes the number of stack frames to skip when identifying the caller.
+
+```go
+func (l *Logger) SetCallerOffset(offset int)
+```
+
+<ParamField path="offset" type="int">
+  The number of stack frames to skip
+</ParamField>
+
+Increase this value if you wrap the Logger in custom helper functions to ensure the reported caller reflects the actual log origin.
+
+**Example**
+
+```go
+logger.SetCallerOffset(2)
+```
+
+## Resource management
+
+### Close
+
+Stops the background worker and flushes all remaining log entries.
+
+```go
+func (l *Logger) Close()
+```
+
+You must call Close before your application exits to ensure no asynchronous logs are lost. It safely decrements the worker reference count and stops the worker when the count reaches zero. Calling Close on a synchronous Logger has no effect.
+
+**Example**
+
+```go
+defer logger.Close()
+```
+
+### Sync
+
+Flushes any buffered log entries to the underlying writer.
+
+```go
+func (l *Logger) Sync() error
+```
+
+Delegates to the worker's sync method for asynchronous loggers, or calls Sync on the underlying io.Writer if it implements the interface. Use this to ensure critical logs are written immediately.
+
+**Example**
+
+```go
+logger.Error("critical error")
+if err := logger.Sync(); err != nil {
+    fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+}
+```
